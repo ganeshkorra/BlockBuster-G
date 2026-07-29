@@ -1,0 +1,129 @@
+{
+  "ver": "2.3.14",
+  "importer": "gltf",
+  "imported": true,
+  "uuid": "c34be819-d7f8-4a9d-8a34-b358e7168a26",
+  "files": [],
+  "subMetas": {
+    "b6515": {
+      "importer": "gltf-mesh",
+      "uuid": "c34be819-d7f8-4a9d-8a34-b358e7168a26@b6515",
+      "displayName": "",
+      "id": "b6515",
+      "name": "Shredder.mesh",
+      "userData": {
+        "gltfIndex": 0,
+        "triangleCount": 188
+      },
+      "ver": "1.1.1",
+      "imported": true,
+      "files": [
+        ".bin",
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "ea40d": {
+      "importer": "gltf-mesh",
+      "uuid": "c34be819-d7f8-4a9d-8a34-b358e7168a26@ea40d",
+      "displayName": "",
+      "id": "ea40d",
+      "name": "ShredderTop.mesh",
+      "userData": {
+        "gltfIndex": 1,
+        "triangleCount": 756
+      },
+      "ver": "1.1.1",
+      "imported": true,
+      "files": [
+        ".bin",
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "e5675": {
+      "importer": "gltf-material",
+      "uuid": "c34be819-d7f8-4a9d-8a34-b358e7168a26@e5675",
+      "displayName": "",
+      "id": "e5675",
+      "name": "Shredder.material",
+      "userData": {
+        "gltfIndex": 0
+      },
+      "ver": "1.0.14",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "131d8": {
+      "importer": "gltf-material",
+      "uuid": "c34be819-d7f8-4a9d-8a34-b358e7168a26@131d8",
+      "displayName": "",
+      "id": "131d8",
+      "name": "ShredderTop.material",
+      "userData": {
+        "gltfIndex": 1
+      },
+      "ver": "1.0.14",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "3c700": {
+      "importer": "gltf-scene",
+      "uuid": "c34be819-d7f8-4a9d-8a34-b358e7168a26@3c700",
+      "displayName": "",
+      "id": "3c700",
+      "name": "Shredder.prefab",
+      "userData": {
+        "gltfIndex": 0
+      },
+      "ver": "1.0.14",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    }
+  },
+  "userData": {
+    "imageMetas": [],
+    "lods": {
+      "enable": false,
+      "hasBuiltinLOD": false,
+      "options": [
+        {
+          "screenRatio": 0.25,
+          "faceCount": 1
+        },
+        {
+          "screenRatio": 0.125,
+          "faceCount": 0.25
+        },
+        {
+          "screenRatio": 0.01,
+          "faceCount": 0.1
+        }
+      ]
+    },
+    "assetFinder": {
+      "meshes": [
+        "c34be819-d7f8-4a9d-8a34-b358e7168a26@b6515",
+        "c34be819-d7f8-4a9d-8a34-b358e7168a26@ea40d"
+      ],
+      "skeletons": [],
+      "textures": [],
+      "materials": [
+        "c34be819-d7f8-4a9d-8a34-b358e7168a26@e5675",
+        "c34be819-d7f8-4a9d-8a34-b358e7168a26@131d8"
+      ],
+      "scenes": [
+        "c34be819-d7f8-4a9d-8a34-b358e7168a26@3c700"
+      ]
+    }
+  }
+}

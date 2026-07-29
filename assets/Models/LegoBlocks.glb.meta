@@ -1,0 +1,113 @@
+{
+  "ver": "2.3.14",
+  "importer": "gltf",
+  "imported": true,
+  "uuid": "3905c57b-3170-497e-9ca0-999c23ca4691",
+  "files": [],
+  "subMetas": {
+    "2f6d1": {
+      "importer": "gltf-mesh",
+      "uuid": "3905c57b-3170-497e-9ca0-999c23ca4691@2f6d1",
+      "displayName": "",
+      "id": "2f6d1",
+      "name": "Cube.mesh",
+      "userData": {
+        "gltfIndex": 0,
+        "triangleCount": 684
+      },
+      "ver": "1.1.1",
+      "imported": true,
+      "files": [
+        ".bin",
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "41ac8": {
+      "importer": "gltf-mesh",
+      "uuid": "3905c57b-3170-497e-9ca0-999c23ca4691@41ac8",
+      "displayName": "",
+      "id": "41ac8",
+      "name": "Cube.001.mesh",
+      "userData": {
+        "gltfIndex": 1,
+        "triangleCount": 2028
+      },
+      "ver": "1.1.1",
+      "imported": true,
+      "files": [
+        ".bin",
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "c8f8c": {
+      "importer": "gltf-mesh",
+      "uuid": "3905c57b-3170-497e-9ca0-999c23ca4691@c8f8c",
+      "displayName": "",
+      "id": "c8f8c",
+      "name": "Cube_1x2.mesh",
+      "userData": {
+        "gltfIndex": 2,
+        "triangleCount": 1132
+      },
+      "ver": "1.1.1",
+      "imported": true,
+      "files": [
+        ".bin",
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "96b7c": {
+      "importer": "gltf-scene",
+      "uuid": "3905c57b-3170-497e-9ca0-999c23ca4691@96b7c",
+      "displayName": "",
+      "id": "96b7c",
+      "name": "LegoBlocks.prefab",
+      "userData": {
+        "gltfIndex": 0
+      },
+      "ver": "1.0.14",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    }
+  },
+  "userData": {
+    "imageMetas": [],
+    "lods": {
+      "enable": false,
+      "hasBuiltinLOD": false,
+      "options": [
+        {
+          "screenRatio": 0.25,
+          "faceCount": 1
+        },
+        {
+          "screenRatio": 0.125,
+          "faceCount": 0.25
+        },
+        {
+          "screenRatio": 0.01,
+          "faceCount": 0.1
+        }
+      ]
+    },
+    "assetFinder": {
+      "meshes": [
+        "3905c57b-3170-497e-9ca0-999c23ca4691@2f6d1",
+        "3905c57b-3170-497e-9ca0-999c23ca4691@41ac8",
+        "3905c57b-3170-497e-9ca0-999c23ca4691@c8f8c"
+      ],
+      "skeletons": [],
+      "textures": [],
+      "materials": [],
+      "scenes": [
+        "3905c57b-3170-497e-9ca0-999c23ca4691@96b7c"
+      ]
+    }
+  }
+}
