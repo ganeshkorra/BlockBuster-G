@@ -205,7 +205,7 @@
     "_allowSleep": true,
     "_linearDamping": 0.1,
     "_angularDamping": 0.1,
-    "_useGravity": true,
+    "_useGravity": false,
     "_linearFactor": {
       "__type__": "cc.Vec3",
       "x": 1,

@@ -1,0 +1,37 @@
+{
+  "ver": "1.0.27",
+  "importer": "image",
+  "imported": true,
+  "uuid": "d4581ed1-b3fb-43b3-9088-4a4513dc3b55",
+  "files": [".json", ".png"],
+  "subMetas": {
+    "6c48a": {
+      "importer": "texture",
+      "uuid": "d4581ed1-b3fb-43b3-9088-4a4513dc3b55@6c48a",
+      "displayName": "CrushGlow",
+      "id": "6c48a",
+      "name": "texture",
+      "userData": {
+        "wrapModeS": "clamp-to-edge",
+        "wrapModeT": "clamp-to-edge",
+        "minfilter": "linear",
+        "magfilter": "linear",
+        "mipfilter": "none",
+        "anisotropy": 0,
+        "isUuid": true,
+        "imageUuidOrDatabaseUri": "d4581ed1-b3fb-43b3-9088-4a4513dc3b55",
+        "visible": false
+      },
+      "ver": "1.0.22",
+      "imported": true,
+      "files": [".json"],
+      "subMetas": {}
+    }
+  },
+  "userData": {
+    "type": "texture",
+    "hasAlpha": true,
+    "fixAlphaTransparencyArtifacts": false,
+    "redirect": "d4581ed1-b3fb-43b3-9088-4a4513dc3b55@6c48a"
+  }
+}
