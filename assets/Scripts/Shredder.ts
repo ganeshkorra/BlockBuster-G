@@ -1,6 +1,6 @@
 import {
-    _decorator, Animation, AudioSource, BoxCollider, Color, Component, Material, MeshRenderer, Node,
-    ParticleSystem, Tween, tween, Vec3,
+    _decorator, Animation, AudioSource, BoxCollider, Color, Component, game, Game, Material, Mesh,
+    MeshRenderer, Node, ParticleSystem, Tween, tween, utils, Vec3,
 } from 'cc';
 import { Block } from './Block';
 import { GameFeelAudio } from './GameFeelAudio';
@@ -19,6 +19,11 @@ export class Shredder extends Component {
     private arrow: Node | null = null;
     private meshHomeScale = new Vec3(1, 1, 1);
     private arrowHomeScale = new Vec3(1, 1, 1);
+    private glowNode: Node | null = null;
+    private glowMaterial: Material | null = null;
+    private glowState = { alpha: 0 };
+    private glowColour = new Color(255, 255, 255, 0);
+    private static glowMesh: Mesh | null = null;
 
     onLoad() {
         this.area = this.findChild('Area');
@@ -29,6 +34,7 @@ export class Shredder extends Component {
         this.arrow = this.findChild('Arrow');
         if (this.mesh) this.meshHomeScale.set(this.mesh.scale);
         if (this.arrow) this.arrowHomeScale.set(this.arrow.scale);
+        game.on(Game.EVENT_HIDE, this.hideExitGlow, this);
     }
 
     matches(block: Block): boolean {
@@ -62,6 +68,7 @@ export class Shredder extends Component {
         const particleColour = new Color(sourceColour.r, sourceColour.g, sourceColour.b, 255);
         this.setAnticipation(false, particleColour);
         this.playGateImpact();
+        this.playExitGlow(particleColour);
         this.playAuthoredParticles(particleColour);
         this.audio?.play();
         GameFeelAudio.playCrushAndChips();
@@ -71,6 +78,144 @@ export class Shredder extends Component {
     private playGateImpact() {
         this.pulseNode(this.mesh, 1.045, 0.06, 0.15);
         this.pulseNode(this.arrow, 1.20, 0.06, 0.15);
+    }
+
+    /**
+     * One reusable vertex-gradient plane per shredder. It begins at the outer
+     * lip and extends only along local +Z, the same authored exit direction as
+     * the Particles child. No geometry reaches into the board interior.
+     */
+    private playExitGlow(sourceColour: Color) {
+        this.ensureExitGlow();
+        const glowNode = this.glowNode;
+        const material = this.glowMaterial;
+        if (!glowNode || !material) return;
+
+        const colour = this.readableGlowColour(sourceColour);
+        this.glowColour.set(colour);
+        this.glowState.alpha = 0;
+        this.applyGlowAlpha();
+        glowNode.active = true;
+
+        Tween.stopAllByTarget(this.glowState);
+        tween(this.glowState)
+            .to(0.05, { alpha: this.glowPeakAlpha(sourceColour) }, {
+                easing: 'quadOut',
+                onUpdate: () => this.applyGlowAlpha(),
+            })
+            .delay(0.23)
+            .to(0.32, { alpha: 0 }, {
+                easing: 'sineIn',
+                onUpdate: () => this.applyGlowAlpha(),
+            })
+            .call(() => {
+                if (this.glowNode?.isValid) this.glowNode.active = false;
+            })
+            .start();
+    }
+
+    private ensureExitGlow() {
+        if (this.glowNode?.isValid && this.glowMaterial) return;
+
+        if (!Shredder.glowMesh) Shredder.glowMesh = this.createGradientGlowMesh();
+        const glow = new Node('RuntimeShredderExitGlow');
+        glow.layer = this.node.layer;
+        this.node.addChild(glow);
+        // Keep the spill just below the gate/chips in camera depth, but above
+        // the board/background surfaces so it cannot be depth-occluded.
+        // +Z is the authored outward direction for these top-edge shredders.
+        glow.setPosition(0, -0.06, 0.34);
+        const renderer = glow.addComponent(MeshRenderer);
+        renderer.mesh = Shredder.glowMesh;
+
+        const material = new Material();
+        // builtin-unlit technique 2 is additive transparent and portable to the
+        // WebGL runtime used by playable-ad preview environments.
+        material.initialize({ effectName: 'builtin-unlit', technique: 2 });
+        material.recompileShaders({ USE_VERTEX_COLOR: true });
+        renderer.setMaterial(material, 0);
+
+        glow.active = false;
+        this.glowNode = glow;
+        this.glowMaterial = material;
+    }
+
+    private createGradientGlowMesh() {
+        // Width follows the authored 5.1-unit shredder opening. Extra edge
+        // bands and depth rows produce a soft rectangular/trapezoidal spill:
+        // bright at the lip, gently fading sideways and away from the board.
+        const xPositions = [-2.58, -2.30, -1.72, 0, 1.72, 2.30, 2.58];
+        const xAlpha = [0, 0.22, 0.72, 1, 0.72, 0.22, 0];
+        const zPositions = [0, 0.16, 0.43, 0.82, 1.30, 1.86, 2.35];
+        const zAlpha = [0.88, 1, 0.92, 0.70, 0.42, 0.16, 0];
+        const positions: number[] = [];
+        const normals: number[] = [];
+        const uvs: number[] = [];
+        const colors: number[] = [];
+        const indices: number[] = [];
+
+        for (let zIndex = 0; zIndex < zPositions.length; zIndex++) {
+            for (let xIndex = 0; xIndex < xPositions.length; xIndex++) {
+                positions.push(xPositions[xIndex], 0, zPositions[zIndex]);
+                normals.push(0, 1, 0);
+                uvs.push(xIndex / (xPositions.length - 1), zIndex / (zPositions.length - 1));
+                colors.push(1, 1, 1, xAlpha[xIndex] * zAlpha[zIndex]);
+            }
+        }
+        for (let zIndex = 0; zIndex < zPositions.length - 1; zIndex++) {
+            for (let xIndex = 0; xIndex < xPositions.length - 1; xIndex++) {
+                const lowerLeft = zIndex * xPositions.length + xIndex;
+                const lowerRight = lowerLeft + 1;
+                const upperLeft = lowerLeft + xPositions.length;
+                const upperRight = upperLeft + 1;
+                indices.push(lowerLeft, upperLeft, lowerRight, lowerRight, upperLeft, upperRight);
+            }
+        }
+        return utils.createMesh({
+            positions,
+            normals,
+            uvs,
+            colors,
+            indices,
+            minPos: new Vec3(-2.58, 0, 0),
+            maxPos: new Vec3(2.58, 0, 2.35),
+        });
+    }
+
+    private readableGlowColour(source: Color) {
+        const brightness = (source.r + source.g + source.b) / 3;
+        if (brightness < 48) return new Color(68, 86, 116, 255);
+        if (brightness > 225) return new Color(218, 238, 255, 255);
+        return new Color(
+            Math.min(255, source.r * 1.10 + 10),
+            Math.min(255, source.g * 1.10 + 10),
+            Math.min(255, source.b * 1.10 + 10),
+            255,
+        );
+    }
+
+    private glowPeakAlpha(source: Color) {
+        const brightness = (source.r + source.g + source.b) / 3;
+        if (brightness < 48) return 112;
+        if (brightness > 225) return 92;
+        return 132;
+    }
+
+    private applyGlowAlpha() {
+        if (!this.glowMaterial) return;
+        this.glowMaterial.setProperty('mainColor', new Color(
+            this.glowColour.r,
+            this.glowColour.g,
+            this.glowColour.b,
+            Math.max(0, Math.min(255, this.glowState.alpha)),
+        ));
+    }
+
+    private hideExitGlow() {
+        Tween.stopAllByTarget(this.glowState);
+        this.glowState.alpha = 0;
+        this.applyGlowAlpha();
+        if (this.glowNode?.isValid) this.glowNode.active = false;
     }
 
     /** Activates the existing child emitter without moving or reauthoring it. */
@@ -160,6 +305,11 @@ export class Shredder extends Component {
     }
 
     onDestroy() {
+        game.off(Game.EVENT_HIDE, this.hideExitGlow, this);
+        this.hideExitGlow();
+        this.glowMaterial?.destroy();
+        this.glowMaterial = null;
+        this.glowNode = null;
         GameFeelAudio.stopGateHum(this.node.uuid);
     }
 }
