@@ -31,7 +31,7 @@ export class GameFeelAudio {
 
         const gain = context.createGain();
         gain.gain.setValueAtTime(0.0001, context.currentTime);
-        gain.gain.linearRampToValueAtTime(0.0022, context.currentTime + 0.05);
+        gain.gain.linearRampToValueAtTime(0.0006, context.currentTime + 0.05);
 
         source.connect(filter);
         filter.connect(gain);
@@ -45,7 +45,7 @@ export class GameFeelAudio {
         const context = this.context;
         if (!voice || !context) return;
         const amount = Math.max(0, Math.min(1, planarDistance / 0.32));
-        const target = 0.0015 + amount * 0.0065;
+        const target = 0.0006 + amount * 0.0034;
         voice.gain.gain.setTargetAtTime(target, context.currentTime, 0.028);
     }
 
@@ -75,7 +75,7 @@ export class GameFeelAudio {
         source.frequency.value = 92;
         const gain = context.createGain();
         gain.gain.setValueAtTime(0.0001, context.currentTime);
-        gain.gain.linearRampToValueAtTime(0.0042, context.currentTime + 0.14);
+        gain.gain.linearRampToValueAtTime(0.0032, context.currentTime + 0.14);
         source.connect(gain);
         gain.connect(this.master);
         source.start();
@@ -105,7 +105,7 @@ export class GameFeelAudio {
         body.frequency.setValueAtTime(78, now);
         body.frequency.exponentialRampToValueAtTime(42, now + 0.105);
         const bodyGain = context.createGain();
-        bodyGain.gain.setValueAtTime(0.025, now);
+        bodyGain.gain.setValueAtTime(0.010, now);
         bodyGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
         body.connect(bodyGain);
         bodyGain.connect(this.master);
@@ -119,7 +119,7 @@ export class GameFeelAudio {
         gritFilter.frequency.value = 560;
         gritFilter.Q.value = 0.8;
         const gritGain = context.createGain();
-        gritGain.gain.setValueAtTime(0.018, now);
+        gritGain.gain.setValueAtTime(0.006, now);
         gritGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.095);
         grit.connect(gritFilter);
         gritFilter.connect(gritGain);
@@ -134,7 +134,7 @@ export class GameFeelAudio {
             chip.type = 'triangle';
             chip.frequency.value = 980 + index * 170;
             const chipGain = context.createGain();
-            chipGain.gain.setValueAtTime(0.0055 - index * 0.00065, start);
+            chipGain.gain.setValueAtTime(0.0024 - index * 0.00025, start);
             chipGain.gain.exponentialRampToValueAtTime(0.0001, start + 0.026);
             chip.connect(chipGain);
             chipGain.connect(this.master);

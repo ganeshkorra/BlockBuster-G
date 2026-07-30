@@ -124,12 +124,22 @@ export class GameManager extends Component {
 
         // The block stays intact while it travels outward. The exit calculation
         // retains its lateral coordinate, eliminating the old centre/left snap.
-        blockBehaviour.consumeThrough(exit, 0.22, () => {
-            shredder.playCrushFeedback(blockBehaviour, exit, direction);
+        blockBehaviour.consumeThrough(exit, 0.50, () => {
+            // Begin the authored crush feedback after 20% of the block has
+            // entered the shredder, while the remaining intake continues.
+            shredder.playCrushFeedback(blockBehaviour);
             this.playCameraImpact(direction);
-            this.blocks = this.blocks.filter((entry) => entry !== block);
-            block.destroy();
-            this.isCrushing = false;
+        }, () => {
+            // The child particle system is inactive before the crush, so its first
+            // visible chips arrive on the following render frame. The block is
+            // removed only after it completes the remaining 80% of its intake.
+            this.scheduleOnce(() => {
+                if (block.isValid) {
+                    this.blocks = this.blocks.filter((entry) => entry !== block);
+                    block.destroy();
+                }
+                this.isCrushing = false;
+            }, 0.04);
         });
     }
 
@@ -322,20 +332,25 @@ export class GameManager extends Component {
         let minZ = Number.NEGATIVE_INFINITY, maxZ = Number.POSITIVE_INFINITY;
         let xWalls = false, zWalls = false;
         const origin = this.boardPhysical.worldPosition;
-        const scale = this.boardPhysical.worldScale;
         for (const wall of this.boardPhysical.getComponents(BoxCollider)) {
-            const centerX = origin.x + wall.center.x * scale.x;
-            const centerZ = origin.z + wall.center.z * scale.z;
-            const halfX = Math.abs(wall.size.x * scale.x) * 0.5;
-            const halfZ = Math.abs(wall.size.z * scale.z) * 0.5;
+            const bounds = this.worldBounds(wall);
+            const centerX = (bounds.minX + bounds.maxX) * 0.5;
+            const centerZ = (bounds.minZ + bounds.maxZ) * 0.5;
+            const halfX = (bounds.maxX - bounds.minX) * 0.5;
+            const halfZ = (bounds.maxZ - bounds.minZ) * 0.5;
             if (halfX < halfZ) {
                 xWalls = true;
-                if (centerX < origin.x) minX = Math.max(minX, centerX + halfX);
-                else maxX = Math.min(maxX, centerX - halfX);
+                // Board rim meshes extend inward beyond the physics wall's inner
+                // face. Derive visual clearance from this wall's own thickness so
+                // the block mesh cannot disappear underneath the visible border.
+                const rimClearance = halfX * 2 * 0.85;
+                if (centerX < origin.x) minX = Math.max(minX, centerX + halfX + rimClearance);
+                else maxX = Math.min(maxX, centerX - halfX - rimClearance);
             } else {
                 zWalls = true;
-                if (centerZ < origin.z) minZ = Math.max(minZ, centerZ + halfZ);
-                else maxZ = Math.min(maxZ, centerZ - halfZ);
+                const rimClearance = halfZ * 2 * 0.85;
+                if (centerZ < origin.z) minZ = Math.max(minZ, centerZ + halfZ + rimClearance);
+                else maxZ = Math.min(maxZ, centerZ - halfZ - rimClearance);
             }
         }
         return xWalls && zWalls ? { minX, maxX, minZ, maxZ } : null;
@@ -347,26 +362,27 @@ export class GameManager extends Component {
         const delta = new Vec3();
         Vec3.subtract(delta, rootPosition, root.worldPosition);
         return colliders.map((collider) => {
-            const scale = collider.node.worldScale;
-            const position = collider.node.worldPosition;
-            const halfX = Math.abs(collider.size.x * scale.x) * 0.5 + 0.03;
-            const halfZ = Math.abs(collider.size.z * scale.z) * 0.5 + 0.03;
-            const centerX = position.x + collider.center.x * scale.x + delta.x;
-            const centerZ = position.z + collider.center.z * scale.z + delta.z;
-            return { minX: centerX - halfX, maxX: centerX + halfX, minZ: centerZ - halfZ, maxZ: centerZ + halfZ };
+            const bounds = this.worldBounds(collider);
+            return {
+                minX: bounds.minX + delta.x - 0.03,
+                maxX: bounds.maxX + delta.x + 0.03,
+                minZ: bounds.minZ + delta.z - 0.03,
+                maxZ: bounds.maxZ + delta.z + 0.03,
+            };
         });
     }
 
     private shredderExitNormal(block: Node, shredder: Node) {
-        const collider = this.shredderRootCollider(shredder);
-        if (!collider) return new Vec3(0, 0, 1);
-        const bounds = this.worldBounds(collider);
         const center = this.boardPhysical?.worldPosition || Vec3.ZERO;
-        const gateCenterX = (bounds.minX + bounds.maxX) * 0.5;
-        const gateCenterZ = (bounds.minZ + bounds.maxZ) * 0.5;
-        return (bounds.maxX - bounds.minX >= bounds.maxZ - bounds.minZ)
-            ? new Vec3(0, 0, gateCenterZ >= center.z ? 1 : -1)
-            : new Vec3(gateCenterX >= center.x ? 1 : -1, 0, 0);
+        const areaCollider = shredder.getComponent(Shredder)?.dropColliders()[0] || null;
+        const areaBounds = areaCollider ? this.worldBounds(areaCollider) : null;
+        const gateCenterX = areaBounds ? (areaBounds.minX + areaBounds.maxX) * 0.5 : shredder.worldPosition.x;
+        const gateCenterZ = areaBounds ? (areaBounds.minZ + areaBounds.maxZ) * 0.5 : shredder.worldPosition.z;
+        const dx = gateCenterX - center.x;
+        const dz = gateCenterZ - center.z;
+        return Math.abs(dx) > Math.abs(dz)
+            ? new Vec3(dx >= 0 ? 1 : -1, 0, 0)
+            : new Vec3(0, 0, dz >= 0 ? 1 : -1);
     }
 
     private shredderExitWorld(block: Node, shredder: Node, normal: Readonly<Vec3>) {
@@ -426,10 +442,9 @@ export class GameManager extends Component {
     }
 
     private worldBounds(collider: BoxCollider): Bounds3D {
-        const scale = collider.node.worldScale;
-        const position = collider.node.worldPosition;
-        const center = new Vec3(position.x + collider.center.x * scale.x, position.y + collider.center.y * scale.y, position.z + collider.center.z * scale.z);
-        const half = new Vec3(Math.abs(collider.size.x * scale.x) * 0.5, Math.abs(collider.size.y * scale.y) * 0.5, Math.abs(collider.size.z * scale.z) * 0.5);
+        const world = collider.worldBounds;
+        const center = world.center;
+        const half = world.halfExtents;
         return { minX: center.x - half.x, maxX: center.x + half.x, minY: center.y - half.y, maxY: center.y + half.y, minZ: center.z - half.z, maxZ: center.z + half.z };
     }
 
