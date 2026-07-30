@@ -85,25 +85,21 @@ export class GameManager extends Component {
         if (!block) return;
         const target = this.pointOnDragPlane(event);
         this.keepInsideBoardColliders(block, target);
-        if (!this.canPlaceWithoutOverlap(block, target)) return;
-
-        block.getComponent(Block)?.moveTo(target);
+        const resolved = this.resolveDragTarget(block, target);
+        block.getComponent(Block)?.moveTo(resolved);
         this.updateGateAnticipation(block);
-        const shredder = this.matchingShredderDrop(block);
-        if (shredder) {
-            this.grabbed = null;
-            this.crush(block, shredder);
-        }
     }
 
     private onTouchEnd() {
         const block = this.grabbed;
         if (!block) return;
         this.grabbed = null;
-        this.clearGateAnticipation();
         const shredder = this.matchingShredderDrop(block);
         if (shredder) this.crush(block, shredder);
-        else block.getComponent(Block)?.endDrag();
+        else {
+            this.clearGateAnticipation();
+            block.getComponent(Block)?.endDrag();
+        }
     }
 
     private onTouchCancel() { this.onTouchEnd(); }
@@ -115,13 +111,20 @@ export class GameManager extends Component {
         if (!blockBehaviour || !shredder) return;
 
         this.isCrushing = true;
-        this.clearGateAnticipation();
-        const exit = this.shredderExitWorld(block, shredderNode);
+        if (this.anticipated === shredder) {
+            // Keep the matching gate energized throughout the intake. The
+            // crush feedback turns it off exactly when the block reaches the rim.
+            this.anticipated = null;
+        } else {
+            this.clearGateAnticipation();
+            shredder.setAnticipation(true, this.blockMainColour(block));
+        }
         const direction = this.shredderExitNormal(block, shredderNode);
+        const exit = this.shredderExitWorld(block, shredderNode, direction);
 
         // The block stays intact while it travels outward. The exit calculation
         // retains its lateral coordinate, eliminating the old centre/left snap.
-        blockBehaviour.consumeThrough(exit, 0.18, () => {
+        blockBehaviour.consumeThrough(exit, 0.22, () => {
             shredder.playCrushFeedback(blockBehaviour, exit, direction);
             this.playCameraImpact(direction);
             this.blocks = this.blocks.filter((entry) => entry !== block);
@@ -258,6 +261,61 @@ export class GameManager extends Component {
         return true;
     }
 
+    /**
+     * Keeps direct finger tracking when space is clear, then slides along the
+     * free axis at an obstacle. A short sweep finds the nearest legal contact
+     * point when both axes are blocked, avoiding the old sticky/frozen drag.
+     */
+    private resolveDragTarget(dragged: Node, desired: Readonly<Vec3>) {
+        const target = new Vec3(desired.x, desired.y, desired.z);
+        if (this.canPlaceWithoutOverlap(dragged, target)) return target;
+
+        const current = dragged.worldPosition.clone();
+        const xOnly = new Vec3(target.x, target.y, current.z);
+        const zOnly = new Vec3(current.x, target.y, target.z);
+        this.keepInsideBoardColliders(dragged, xOnly);
+        this.keepInsideBoardColliders(dragged, zOnly);
+
+        const legal: Vec3[] = [];
+        if (this.canPlaceWithoutOverlap(dragged, xOnly)) legal.push(xOnly);
+        if (this.canPlaceWithoutOverlap(dragged, zOnly)) legal.push(zOnly);
+        if (legal.length > 0) {
+            let closest = legal[0];
+            let closestDistance = this.planarDistanceSquared(closest, target);
+            for (let index = 1; index < legal.length; index++) {
+                const distance = this.planarDistanceSquared(legal[index], target);
+                if (distance < closestDistance) {
+                    closest = legal[index];
+                    closestDistance = distance;
+                }
+            }
+            return closest;
+        }
+
+        let low = 0;
+        let high = 1;
+        let lastLegal = current;
+        for (let step = 0; step < 7; step++) {
+            const amount = (low + high) * 0.5;
+            const candidate = new Vec3();
+            Vec3.lerp(candidate, current, target, amount);
+            this.keepInsideBoardColliders(dragged, candidate);
+            if (this.canPlaceWithoutOverlap(dragged, candidate)) {
+                low = amount;
+                lastLegal = candidate;
+            } else {
+                high = amount;
+            }
+        }
+        return lastLegal;
+    }
+
+    private planarDistanceSquared(a: Readonly<Vec3>, b: Readonly<Vec3>) {
+        const dx = a.x - b.x;
+        const dz = a.z - b.z;
+        return dx * dx + dz * dz;
+    }
+
     private readBoardInterior(): Rect | null {
         if (!this.boardPhysical) return null;
         let minX = Number.NEGATIVE_INFINITY, maxX = Number.POSITIVE_INFINITY;
@@ -304,17 +362,18 @@ export class GameManager extends Component {
         if (!collider) return new Vec3(0, 0, 1);
         const bounds = this.worldBounds(collider);
         const center = this.boardPhysical?.worldPosition || Vec3.ZERO;
+        const gateCenterX = (bounds.minX + bounds.maxX) * 0.5;
+        const gateCenterZ = (bounds.minZ + bounds.maxZ) * 0.5;
         return (bounds.maxX - bounds.minX >= bounds.maxZ - bounds.minZ)
-            ? new Vec3(0, 0, block.worldPosition.z >= center.z ? 1 : -1)
-            : new Vec3(block.worldPosition.x >= center.x ? 1 : -1, 0, 0);
+            ? new Vec3(0, 0, gateCenterZ >= center.z ? 1 : -1)
+            : new Vec3(gateCenterX >= center.x ? 1 : -1, 0, 0);
     }
 
-    private shredderExitWorld(block: Node, shredder: Node) {
+    private shredderExitWorld(block: Node, shredder: Node, normal: Readonly<Vec3>) {
         const collider = this.shredderRootCollider(shredder);
         if (!collider) return shredder.worldPosition.clone();
         const bounds = this.worldBounds(collider);
         const exit = block.worldPosition.clone();
-        const normal = this.shredderExitNormal(block, shredder);
         if (Math.abs(normal.z) > 0) exit.z = normal.z > 0 ? bounds.maxZ + this.blockHalfExtent(block, 'z') : bounds.minZ - this.blockHalfExtent(block, 'z');
         else exit.x = normal.x > 0 ? bounds.maxX + this.blockHalfExtent(block, 'x') : bounds.minX - this.blockHalfExtent(block, 'x');
         return exit;
