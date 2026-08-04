@@ -196,8 +196,12 @@ export class GameManager extends Component {
     private matchingShredderDrop(block: Node): Node | null {
         for (const target of this.targetsFor(block)) {
             const shredder = target.getComponent(Shredder);
-            const blockBehaviour = block.getComponent(Block);
-            if (shredder && blockBehaviour && shredder.matches(blockBehaviour) && this.overlapsShredderTrigger(block, target)) return target;
+            // The Elements inspector explicitly assigns every block colour to
+            // its legal shredder. Do not make that authored link depend on a
+            // second material comparison: prefab material overrides can make
+            // two visibly identical Pink materials appear as different runtime
+            // objects and incorrectly reject an otherwise valid drop.
+            if (shredder && this.overlapsShredderTrigger(block, target)) return target;
         }
         return null;
     }
@@ -247,7 +251,20 @@ export class GameManager extends Component {
         const targets = gate?.dropColliders() || this.allBoxColliders(shredder);
         for (const blockCollider of this.allBoxColliders(block)) {
             for (const targetCollider of targets) {
-                if (this.boundsIntersect(this.worldBounds(blockCollider), this.worldBounds(targetCollider))) return true;
+                const trigger = this.worldBounds(targetCollider);
+                // The authored Area collider is intentionally a very thin slit.
+                // Give a released block a forgiving intake margin so a block
+                // stopped by the board wall can still enter its assigned gate.
+                // A full block can be held back from the physical rim by its
+                // own collider. Let the gate reach one block inward, matching
+                // the visible mouth rather than requiring a pixel-perfect
+                // overlap with its tiny authored trigger.
+                const intakeMargin = 1.15;
+                trigger.minX -= intakeMargin;
+                trigger.maxX += intakeMargin;
+                trigger.minZ -= intakeMargin;
+                trigger.maxZ += intakeMargin;
+                if (this.boundsIntersect(this.worldBounds(blockCollider), trigger)) return true;
             }
         }
         return false;
