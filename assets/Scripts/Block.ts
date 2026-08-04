@@ -12,6 +12,7 @@ export class Block extends Component {
     private homeScale = new Vec3(1, 1, 1);
     private dragging = false;
     private consuming = false;
+    private dragTarget: Vec3 | null = null;
 
     onLoad() {
         this.body = this.getComponent(RigidBody);
@@ -24,6 +25,7 @@ export class Block extends Component {
     beginDrag(): boolean {
         if (this.dragging || this.consuming) return false;
         this.dragging = true;
+        this.dragTarget = this.node.worldPosition.clone();
         this.homeScale.set(this.node.scale);
         this.stopBody();
         Tween.stopAllByTarget(this.node);
@@ -40,12 +42,28 @@ export class Block extends Component {
         const dx = position.x - current.x;
         const dz = position.z - current.z;
         GameFeelAudio.updateDrag(this.node.uuid, Math.sqrt(dx * dx + dz * dz));
-        this.node.setWorldPosition(position);
+        this.dragTarget = new Vec3(position.x, position.y, position.z);
+    }
+
+    update(deltaTime: number) {
+        if (!this.dragging || !this.dragTarget || this.consuming) return;
+        // Frame-rate-independent smoothing: the block catches up quickly but
+        // never jerks between uneven touch-move events.
+        const follow = 1 - Math.exp(-24 * deltaTime);
+        const next = new Vec3();
+        Vec3.lerp(next, this.node.worldPosition, this.dragTarget, follow);
+        this.node.setWorldPosition(next);
+    }
+
+    /** Snaps to the latest legal drag target before a release is evaluated. */
+    settleDrag() {
+        if (this.dragTarget && !this.consuming) this.node.setWorldPosition(this.dragTarget);
     }
 
     endDrag() {
         if (!this.dragging || this.consuming) return;
         this.dragging = false;
+        this.dragTarget = null;
         GameFeelAudio.stopDrag(this.node.uuid);
         Tween.stopAllByTarget(this.node);
         tween(this.node).to(0.10, { scale: this.homeScale.clone() }, { easing: 'quadOut' }).start();
@@ -65,6 +83,7 @@ export class Block extends Component {
         if (this.consuming) return;
         this.consuming = true;
         this.dragging = false;
+        this.dragTarget = null;
         GameFeelAudio.stopDrag(this.node.uuid);
         this.stopBody();
         // Stop an unfinished pickup-scale tween without changing the current
@@ -126,6 +145,7 @@ export class Block extends Component {
         if (this.consuming) return;
         this.consuming = true;
         this.dragging = false;
+        this.dragTarget = null;
         GameFeelAudio.stopDrag(this.node.uuid);
         this.stopBody();
         Tween.stopAllByTarget(this.node);

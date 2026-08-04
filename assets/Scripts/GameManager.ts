@@ -38,6 +38,8 @@ export class GameManager extends Component {
     private anticipated: Shredder | null = null;
     private isCrushing = false;
     private dragHeight = 0;
+    /** Offset from the finger to the grabbed point on the block. */
+    private dragOffset = new Vec3();
 
     start() {
         this.camera = this.camera || find('Main Camera')?.getComponent(Camera) || null;
@@ -78,12 +80,17 @@ export class GameManager extends Component {
         if (!block || !behaviour || !behaviour.beginDrag()) return;
         this.grabbed = block;
         this.dragHeight = block.worldPosition.y;
+        const touchPoint = this.pointOnDragPlane(event);
+        Vec3.subtract(this.dragOffset, block.worldPosition, touchPoint);
+        this.dragOffset.y = 0;
     }
 
     private onTouchMove(event: EventTouch) {
         const block = this.grabbed;
         if (!block) return;
         const target = this.pointOnDragPlane(event);
+        target.x += this.dragOffset.x;
+        target.z += this.dragOffset.z;
         this.keepInsideBoardColliders(block, target);
         const resolved = this.resolveDragTarget(block, target);
         block.getComponent(Block)?.moveTo(resolved);
@@ -94,6 +101,9 @@ export class GameManager extends Component {
         const block = this.grabbed;
         if (!block) return;
         this.grabbed = null;
+        // Complete the short follow smoothing before evaluating the drop.
+        // This keeps a quick release over a gate from feeling unresponsive.
+        block.getComponent(Block)?.settleDrag();
         const shredder = this.matchingShredderDrop(block);
         if (shredder) this.crush(block, shredder);
         else {
@@ -243,7 +253,11 @@ export class GameManager extends Component {
         return false;
     }
 
-    /** Board walls, not hard-coded dimensions, define the playable area. */
+    /**
+     * The four BoxColliders authored on BoardPhysical are the only source of
+     * truth for the board boundary. Their inner faces define the legal area;
+     * no board dimensions or wall offsets are duplicated in code.
+     */
     private keepInsideBoardColliders(block: Node, target: Vec3) {
         const board = this.readBoardInterior();
         if (!board) return;
@@ -340,17 +354,12 @@ export class GameManager extends Component {
             const halfZ = (bounds.maxZ - bounds.minZ) * 0.5;
             if (halfX < halfZ) {
                 xWalls = true;
-                // Board rim meshes extend inward beyond the physics wall's inner
-                // face. Derive visual clearance from this wall's own thickness so
-                // the block mesh cannot disappear underneath the visible border.
-                const rimClearance = halfX * 2 * 0.85;
-                if (centerX < origin.x) minX = Math.max(minX, centerX + halfX + rimClearance);
-                else maxX = Math.min(maxX, centerX - halfX - rimClearance);
+                if (centerX < origin.x) minX = Math.max(minX, centerX + halfX);
+                else maxX = Math.min(maxX, centerX - halfX);
             } else {
                 zWalls = true;
-                const rimClearance = halfZ * 2 * 0.85;
-                if (centerZ < origin.z) minZ = Math.max(minZ, centerZ + halfZ + rimClearance);
-                else maxZ = Math.min(maxZ, centerZ - halfZ - rimClearance);
+                if (centerZ < origin.z) minZ = Math.max(minZ, centerZ + halfZ);
+                else maxZ = Math.min(maxZ, centerZ - halfZ);
             }
         }
         return xWalls && zWalls ? { minX, maxX, minZ, maxZ } : null;
