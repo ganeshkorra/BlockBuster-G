@@ -80,7 +80,15 @@
   ],
   "_props": [
     {
-      "specularIntensity": 0.4
+      "mainColor": {
+        "__type__": "cc.Color",
+        "r": 255,
+        "g": 252,
+        "b": 244,
+        "a": 255
+      },
+      "roughness": 0.5,
+      "specularIntensity": 0.38
     },
     {},
     {},
