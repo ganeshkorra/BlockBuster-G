@@ -81,9 +81,9 @@ export class Shredder extends Component {
     }
 
     /**
-     * One reusable vertex-gradient plane per shredder. It begins at the outer
-     * lip and extends only along local +Z, the same authored exit direction as
-     * the Particles child. No geometry reaches into the board interior.
+     * One reusable vertex-gradient beam per shredder. It begins at the outer
+     * lip and widens along local +Z, matching the short trapezoid of bloom seen
+     * when a block exits a gate. No geometry reaches into the board interior.
      */
     private playExitGlow(sourceColour: Color) {
         this.ensureExitGlow();
@@ -141,12 +141,15 @@ export class Shredder extends Component {
     }
 
     private createGradientGlowMesh() {
-        // Width follows the authored 5.1-unit shredder opening. Extra edge
-        // bands and depth rows produce a soft rectangular/trapezoidal spill:
-        // bright at the lip, gently fading sideways and away from the board.
-        const xPositions = [-2.58, -2.30, -1.72, 0, 1.72, 2.30, 2.58];
+        // The beam starts at the 5.1-unit shredder mouth and fans outward.
+        // Its shape is deliberately a trapezoid rather than a rectangle: this
+        // makes the bloom read as emitted by the exit, not laid on the board.
+        const xFractions = [-1, -0.84, -0.54, 0, 0.54, 0.84, 1];
         const xAlpha = [0, 0.22, 0.72, 1, 0.72, 0.22, 0];
-        const zPositions = [0, 0.16, 0.43, 0.82, 1.30, 1.86, 2.35];
+        // Keep the bloom close to the exit. Change this one value to tune its
+        // visible distance without changing its source shape.
+        const beamLength = 1.05;
+        const zPositions = [0, 0.07, 0.18, 0.37, 0.58, 0.82, beamLength];
         const zAlpha = [0.88, 1, 0.92, 0.70, 0.42, 0.16, 0];
         const positions: number[] = [];
         const normals: number[] = [];
@@ -155,18 +158,21 @@ export class Shredder extends Component {
         const indices: number[] = [];
 
         for (let zIndex = 0; zIndex < zPositions.length; zIndex++) {
-            for (let xIndex = 0; xIndex < xPositions.length; xIndex++) {
-                positions.push(xPositions[xIndex], 0, zPositions[zIndex]);
+            // The first row spans the gate opening; the far edge is wider and
+            // fully transparent, leaving a naturally feathered fan shape.
+            const halfWidth = 0.7 + (0.72 * zIndex / (zPositions.length - 1));
+            for (let xIndex = 0; xIndex < xFractions.length; xIndex++) {
+                positions.push(xFractions[xIndex] * halfWidth, 0, zPositions[zIndex]);
                 normals.push(0, 1, 0);
-                uvs.push(xIndex / (xPositions.length - 1), zIndex / (zPositions.length - 1));
+                uvs.push(xIndex / (xFractions.length - 1), zIndex / (zPositions.length - 1));
                 colors.push(1, 1, 1, xAlpha[xIndex] * zAlpha[zIndex]);
             }
         }
         for (let zIndex = 0; zIndex < zPositions.length - 1; zIndex++) {
-            for (let xIndex = 0; xIndex < xPositions.length - 1; xIndex++) {
-                const lowerLeft = zIndex * xPositions.length + xIndex;
+            for (let xIndex = 0; xIndex < xFractions.length - 1; xIndex++) {
+                const lowerLeft = zIndex * xFractions.length + xIndex;
                 const lowerRight = lowerLeft + 1;
-                const upperLeft = lowerLeft + xPositions.length;
+                const upperLeft = lowerLeft + xFractions.length;
                 const upperRight = upperLeft + 1;
                 indices.push(lowerLeft, upperLeft, lowerRight, lowerRight, upperLeft, upperRight);
             }
@@ -177,8 +183,8 @@ export class Shredder extends Component {
             uvs,
             colors,
             indices,
-            minPos: new Vec3(-2.58, 0, 0),
-            maxPos: new Vec3(2.58, 0, 2.35),
+            minPos: new Vec3(-1.42, 0, 0),
+            maxPos: new Vec3(1.42, 0, beamLength),
         });
     }
 
