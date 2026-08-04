@@ -4,18 +4,28 @@ const file = 'assets/scene.before-black-white-checkerboard.scene';
 const scene = JSON.parse(fs.readFileSync(file, 'utf8'));
 // Read each row left-to-right: White, Pink, White, Pink. The next row starts
 // with Pink, exactly like the checker pattern in the supplied reference.
-const white = [
-  [-5, 8], [3, 8], [-3, 6], [5, 6], [-5, 4], [3, 4],
-  [-5, 0], [-1, 0], [3, 0], [-3, -2], [1, -2], [5, -2],
-  [-5, -4], [-1, -4], [3, -4], [-3, -6], [1, -6], [5, -6],
-  [-5, -8], [-1, -8], [3, -8],
+const rows = [
+  // Two alternating columns on each side of the upper yellow block.
+  { z: 8, x: [-5, -3, 3, 5], whiteFirst: true },
+  { z: 6, x: [-5, -3, 3, 5], whiteFirst: false },
+  { z: 4, x: [-5, -3, 3, 5], whiteFirst: true },
+  { z: 2, x: [-5, -3, 3, 5], whiteFirst: false },
+  // The layout narrows beneath the blocked yellow piece.
+  { z: 0, x: [-3, -1, 1, 3], whiteFirst: false },
+  { z: -2, x: [-3, -1, 1, 3], whiteFirst: true },
+  // Then opens into the wide lower section.
+  { z: -4, x: [-5, -3, -1, 1, 3, 5], whiteFirst: true },
+  { z: -6, x: [-5, -3, -1, 1, 3, 5], whiteFirst: false },
+  { z: -8, x: [-5, -3, -1, 1, 3, 5], whiteFirst: true },
 ];
-const pink = [
-  [-3, 8], [5, 8], [-5, 6], [3, 6], [-3, 4], [5, 4],
-  [-3, 0], [1, 0], [5, 0], [-5, -2], [-1, -2], [3, -2],
-  [-3, -4], [1, -4], [5, -4], [-5, -6], [-1, -6], [3, -6],
-  [-3, -8], [1, -8], [5, -8],
-];
+const white = [];
+const pink = [];
+for (const row of rows) {
+  row.x.forEach((x, column) => {
+    const target = (column % 2 === 0) === row.whiteFirst ? white : pink;
+    target.push([x, row.z]);
+  });
+}
 
 function turnLastWhiteIntoPink() {
   const whiteName = scene.find((item) => item?.__type__ === 'CCPropertyOverrideInfo' && item.propertyPath?.join('.') === '_name' && item.value === 'White-14');

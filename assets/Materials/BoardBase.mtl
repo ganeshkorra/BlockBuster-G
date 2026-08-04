@@ -80,20 +80,21 @@
     {
       "tilingOffset": {
         "__type__": "cc.Vec4",
-        "x": 14,
-        "y": 20,
+        "x": 7,
+        "y": 9.6,
         "z": 0,
         "w": 0
       },
       "mainColor": {
         "__type__": "cc.Color",
-        "r": 138,
-        "g": 158,
-        "b": 255,
+        "r": 73,
+        "g": 64,
+        "b": 142,
         "a": 255
       },
-      "specularIntensity": 0.15,
-      "normalStrength": 0.5,
+      "roughness": 0.62,
+      "specularIntensity": 0.18,
+      "normalStrength": 5,
       "mainTexture": {
         "__uuid__": "383a2887-d412-4e7e-a324-c42f4cf76086@6c48a",
         "__expectedType__": "cc.Texture2D"
