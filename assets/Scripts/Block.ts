@@ -1,5 +1,5 @@
 import {
-    _decorator, Component, Material, MeshRenderer, RigidBody, Tween, tween, Vec3,
+    _decorator, BoxCollider, Color, Component, Material, Mesh, MeshRenderer, Node, RigidBody, Tween, tween, utils, Vec3,
 } from 'cc';
 import { GameFeelAudio } from './GameFeelAudio';
 
@@ -8,11 +8,17 @@ const { ccclass } = _decorator;
 /** Runtime behaviour for one draggable puzzle block. */
 @ccclass('Block')
 export class Block extends Component {
+    private static footprintMesh: Mesh | null = null;
     private body: RigidBody | null = null;
     private homeScale = new Vec3(1, 1, 1);
     private dragging = false;
     private consuming = false;
     private dragTarget: Vec3 | null = null;
+    private dragBaseY = 0;
+    private readonly dragLift = 0.28;
+    private footprintTiles: Node[] = [];
+    private footprintMaterial: Material | null = null;
+    private footprintPulse = { alpha: 0 };
 
     onLoad() {
         this.body = this.getComponent(RigidBody);
@@ -25,7 +31,9 @@ export class Block extends Component {
     beginDrag(): boolean {
         if (this.dragging || this.consuming) return false;
         this.dragging = true;
+        this.dragBaseY = this.node.worldPosition.y;
         this.dragTarget = this.node.worldPosition.clone();
+        this.showFootprint(true);
         this.homeScale.set(this.node.scale);
         this.stopBody();
         Tween.stopAllByTarget(this.node);
@@ -42,7 +50,9 @@ export class Block extends Component {
         const dx = position.x - current.x;
         const dz = position.z - current.z;
         GameFeelAudio.updateDrag(this.node.uuid, Math.sqrt(dx * dx + dz * dz));
-        this.dragTarget = new Vec3(position.x, position.y, position.z);
+        // Lift the held block above its board cells so the placement footprint
+        // is visible underneath, as in the reference interaction.
+        this.dragTarget = new Vec3(position.x, this.dragBaseY + this.dragLift, position.z);
     }
 
     update(deltaTime: number) {
@@ -53,17 +63,21 @@ export class Block extends Component {
         const next = new Vec3();
         Vec3.lerp(next, this.node.worldPosition, this.dragTarget, follow);
         this.node.setWorldPosition(next);
+        this.updateFootprintTiles();
     }
 
     /** Snaps to the latest legal drag target before a release is evaluated. */
     settleDrag() {
-        if (this.dragTarget && !this.consuming) this.node.setWorldPosition(this.dragTarget);
+        if (!this.dragTarget || this.consuming) return;
+        // Drop to board height before the gate-overlap calculation.
+        this.node.setWorldPosition(new Vec3(this.dragTarget.x, this.dragBaseY, this.dragTarget.z));
     }
 
     endDrag() {
         if (!this.dragging || this.consuming) return;
         this.dragging = false;
         this.dragTarget = null;
+        this.showFootprint(false);
         GameFeelAudio.stopDrag(this.node.uuid);
         Tween.stopAllByTarget(this.node);
         tween(this.node).to(0.10, { scale: this.homeScale.clone() }, { easing: 'quadOut' }).start();
@@ -84,6 +98,7 @@ export class Block extends Component {
         this.consuming = true;
         this.dragging = false;
         this.dragTarget = null;
+        this.showFootprint(false);
         GameFeelAudio.stopDrag(this.node.uuid);
         this.stopBody();
         // Stop an unfinished pickup-scale tween without changing the current
@@ -146,6 +161,7 @@ export class Block extends Component {
         this.consuming = true;
         this.dragging = false;
         this.dragTarget = null;
+        this.showFootprint(false);
         GameFeelAudio.stopDrag(this.node.uuid);
         this.stopBody();
         Tween.stopAllByTarget(this.node);
@@ -165,6 +181,105 @@ export class Block extends Component {
 
     onDestroy() {
         GameFeelAudio.stopDrag(this.node.uuid);
+        Tween.stopAllByTarget(this.footprintPulse);
+        this.footprintMaterial?.destroy();
+        this.footprintMaterial = null;
+        for (const tile of this.footprintTiles) if (tile.isValid) tile.destroy();
+        this.footprintTiles = [];
+    }
+
+    /** Glows the individual board cells occupied by the held block. */
+    private showFootprint(visible: boolean) {
+        this.ensureFootprint();
+        if (this.footprintTiles.length === 0) return;
+        Tween.stopAllByTarget(this.footprintPulse);
+        if (!visible) {
+            for (const tile of this.footprintTiles) tile.active = false;
+            return;
+        }
+        this.updateFootprintTiles();
+        this.footprintPulse.alpha = 0;
+        this.applyFootprintAlpha();
+        for (const tile of this.footprintTiles) tile.active = true;
+        tween(this.footprintPulse)
+            .to(0.16, { alpha: 235 }, { easing: 'sineInOut', onUpdate: () => this.applyFootprintAlpha() })
+            .to(0.28, { alpha: 145 }, { easing: 'sineInOut', onUpdate: () => this.applyFootprintAlpha() })
+            .union()
+            .repeatForever()
+            .start();
+    }
+
+    private ensureFootprint() {
+        if (this.footprintTiles.length > 0) return;
+        if (!Block.footprintMesh) {
+            Block.footprintMesh = utils.createMesh({
+                positions: [-1, 0, -1, 1, 0, -1, 1, 0, 1, -1, 0, 1],
+                normals: [0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
+                uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+                colors: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                indices: [0, 2, 1, 0, 3, 2],
+                minPos: new Vec3(-1, 0, -1),
+                maxPos: new Vec3(1, 0, 1),
+            });
+        }
+        const collider = this.getComponent(BoxCollider);
+        const worldScale = this.node.worldScale;
+        const width = (collider?.size.x || 1.9) * worldScale.x;
+        const depth = (collider?.size.z || 1.9) * worldScale.z;
+        const columns = Math.max(1, Math.round(width));
+        const rows = Math.max(1, Math.round(depth));
+        const material = new Material();
+        material.initialize({ effectName: 'builtin-unlit', technique: 2 });
+        material.recompileShaders({ USE_VERTEX_COLOR: true });
+        this.footprintMaterial = material;
+        const parent = this.node.parent || this.node;
+        for (let row = 0; row < rows; row++) {
+            for (let column = 0; column < columns; column++) {
+                const tile = new Node('DragTileGlow');
+                tile.layer = this.node.layer;
+                parent.addChild(tile);
+                // Each quad is just under one grid cell, so the dark seams
+                // remain visible between glowing cells.
+                tile.setScale(0.48, 1, 0.48);
+                const renderer = tile.addComponent(MeshRenderer);
+                renderer.mesh = Block.footprintMesh;
+                renderer.setMaterial(material, 0);
+                tile.active = false;
+                this.footprintTiles.push(tile);
+            }
+        }
+    }
+
+    private applyFootprintAlpha() {
+        this.footprintMaterial?.setProperty('mainColor', new Color(78, 212, 255, this.footprintPulse.alpha));
+    }
+
+    private updateFootprintTiles() {
+        if (this.footprintTiles.length === 0) return;
+        const collider = this.getComponent(BoxCollider);
+        const scale = this.node.worldScale;
+        const width = (collider?.size.x || 1.9) * scale.x;
+        const depth = (collider?.size.z || 1.9) * scale.z;
+        const columns = Math.max(1, Math.round(width));
+        const rows = Math.max(1, Math.round(depth));
+        const stepX = width / columns;
+        const stepZ = depth / rows;
+        const origin = this.node.worldPosition;
+        let index = 0;
+        for (let row = 0; row < rows; row++) {
+            for (let column = 0; column < columns; column++) {
+                const tile = this.footprintTiles[index++];
+                tile.setWorldPosition(new Vec3(
+                    origin.x - width * 0.5 + stepX * (column + 0.5),
+                    // The board mesh sits above the block root origin, so the
+                    // indicator must be raised into its visible surface layer.
+                    // The block itself is lifted while dragging; glow cells
+                    // remain fixed on the board directly below its footprint.
+                    this.dragBaseY + 0.20,
+                    origin.z - depth * 0.5 + stepZ * (row + 0.5),
+                ));
+            }
+        }
     }
 
     private stopBody() {

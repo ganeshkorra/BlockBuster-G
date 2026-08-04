@@ -59,7 +59,12 @@ export class GameManager extends Component {
 
     /** Rebuilds runtime state exclusively from the Elements inspector arrays. */
     refreshSceneReferences() {
-        this.boardPhysical = this.node.parent ? this.findDescendant(this.node.parent, 'BoardPhysical') : null;
+        // Search from the actual scene root. This keeps the BoardPhysical
+        // collider lookup valid even when GameManager is nested differently in
+        // another level scene.
+        let sceneRoot: Node = this.node;
+        while (sceneRoot.parent) sceneRoot = sceneRoot.parent;
+        this.boardPhysical = this.findDescendant(sceneRoot, 'BoardPhysical');
         this.blocks = [];
         for (const element of this.elements) {
             for (const block of element.blockNodes) {
@@ -71,6 +76,21 @@ export class GameManager extends Component {
             if (body) body.useGravity = false;
         }
         if (!this.boardPhysical || this.blocks.length === 0) console.warn('[GameManager] Add BoardPhysical and Element block references.');
+    }
+
+    /**
+     * Block follows are smoothed in Block.update(), after touch input has been
+     * processed. Clamp the final world position too: this closes the one-frame
+     * escape that can happen on a very fast drag. The four authored
+     * BoardPhysical BoxColliders remain the only boundary data used here.
+     */
+    lateUpdate() {
+        if (!this.grabbed || this.isCrushing) return;
+        const constrained = this.grabbed.worldPosition.clone();
+        this.keepInsideBoardColliders(this.grabbed, constrained);
+        if (constrained.x !== this.grabbed.worldPosition.x || constrained.z !== this.grabbed.worldPosition.z) {
+            this.grabbed.setWorldPosition(constrained);
+        }
     }
 
     private onTouchStart(event: EventTouch) {
@@ -107,6 +127,7 @@ export class GameManager extends Component {
         const shredder = this.matchingShredderDrop(block);
         if (shredder) this.crush(block, shredder);
         else {
+            this.snapBlockToGrid(block);
             this.clearGateAnticipation();
             block.getComponent(Block)?.endDrag();
         }
@@ -355,6 +376,41 @@ export class GameManager extends Component {
         const dx = a.x - b.x;
         const dz = a.z - b.z;
         return dx * dx + dz * dz;
+    }
+
+    /**
+     * Drops pieces onto the nearest unoccupied grid position. The board's
+     * centre defines the grid origin, so authored BoardPhysical colliders stay
+     * the only board configuration required by this scene.
+     */
+    private snapBlockToGrid(block: Node) {
+        const current = block.worldPosition;
+        const origin = this.boardPhysical?.worldPosition || Vec3.ZERO;
+        const baseX = Math.round(current.x - origin.x) + origin.x;
+        const baseZ = Math.round(current.z - origin.z) + origin.z;
+        let best: Vec3 | null = null;
+        let bestDistance = Number.POSITIVE_INFINITY;
+
+        // Try the closest cell first, then a small ring around it when that
+        // cell is occupied. This prevents a release from landing half-on a
+        // neighbouring button or overlapping another block.
+        for (let radius = 0; radius <= 2; radius++) {
+            for (let xOffset = -radius; xOffset <= radius; xOffset++) {
+                for (let zOffset = -radius; zOffset <= radius; zOffset++) {
+                    if (Math.max(Math.abs(xOffset), Math.abs(zOffset)) !== radius) continue;
+                    const candidate = new Vec3(baseX + xOffset, current.y, baseZ + zOffset);
+                    this.keepInsideBoardColliders(block, candidate);
+                    if (!this.canPlaceWithoutOverlap(block, candidate)) continue;
+                    const distance = this.planarDistanceSquared(candidate, current);
+                    if (distance < bestDistance) {
+                        best = candidate;
+                        bestDistance = distance;
+                    }
+                }
+            }
+            if (best) break;
+        }
+        if (best) block.setWorldPosition(best);
     }
 
     private readBoardInterior(): Rect | null {
