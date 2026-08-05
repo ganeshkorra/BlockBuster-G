@@ -280,7 +280,7 @@ export class GameManager extends Component {
                 // own collider. Let the gate reach one block inward, matching
                 // the visible mouth rather than requiring a pixel-perfect
                 // overlap with its tiny authored trigger.
-                const intakeMargin = 1.15;
+                const intakeMargin = 0.15;
                 trigger.minX -= intakeMargin;
                 trigger.maxX += intakeMargin;
                 trigger.minZ -= intakeMargin;
