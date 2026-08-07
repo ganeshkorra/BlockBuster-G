@@ -1,0 +1,96 @@
+{
+  "ver": "2.3.14",
+  "importer": "fbx",
+  "imported": true,
+  "uuid": "6a7272cb-061a-4178-afec-c474404c0bd7",
+  "files": [],
+  "subMetas": {
+    "e2349": {
+      "importer": "gltf-mesh",
+      "uuid": "6a7272cb-061a-4178-afec-c474404c0bd7@e2349",
+      "displayName": "",
+      "id": "e2349",
+      "name": "Mesh.mesh",
+      "userData": {
+        "gltfIndex": 0,
+        "triangleCount": 3856
+      },
+      "ver": "1.1.1",
+      "imported": true,
+      "files": [
+        ".bin",
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "d8b49": {
+      "importer": "gltf-material",
+      "uuid": "6a7272cb-061a-4178-afec-c474404c0bd7@d8b49",
+      "displayName": "",
+      "id": "d8b49",
+      "name": "standardSurface1.material",
+      "userData": {
+        "gltfIndex": 0
+      },
+      "ver": "1.0.14",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "64cc4": {
+      "importer": "gltf-scene",
+      "uuid": "6a7272cb-061a-4178-afec-c474404c0bd7@64cc4",
+      "displayName": "",
+      "id": "64cc4",
+      "name": "mesh .prefab",
+      "userData": {
+        "gltfIndex": 0
+      },
+      "ver": "1.0.14",
+      "imported": true,
+      "files": [
+        ".json"
+      ],
+      "subMetas": {}
+    }
+  },
+  "userData": {
+    "imageMetas": [],
+    "fbx": {
+      "smartMaterialEnabled": true
+    },
+    "lods": {
+      "enable": false,
+      "hasBuiltinLOD": false,
+      "options": [
+        {
+          "screenRatio": 0.25,
+          "faceCount": 1
+        },
+        {
+          "screenRatio": 0.125,
+          "faceCount": 0.25
+        },
+        {
+          "screenRatio": 0.01,
+          "faceCount": 0.1
+        }
+      ]
+    },
+    "assetFinder": {
+      "meshes": [
+        "6a7272cb-061a-4178-afec-c474404c0bd7@e2349"
+      ],
+      "skeletons": [],
+      "textures": [],
+      "materials": [
+        "6a7272cb-061a-4178-afec-c474404c0bd7@d8b49"
+      ],
+      "scenes": [
+        "6a7272cb-061a-4178-afec-c474404c0bd7@64cc4"
+      ]
+    }
+  }
+}
