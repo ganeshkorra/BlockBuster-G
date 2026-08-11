@@ -42,6 +42,10 @@ export class GameManager extends Component {
     private dragHeight = 0;
     /** Offset from the finger to the grabbed point on the block. */
     private dragOffset = new Vec3();
+    /** Last displayed position whose complete collider did not overlap another block. */
+    private lastLegalDragPosition: Vec3 | null = null;
+    /** Use the complete authored collider; a positive inset permits visible penetration. */
+    private readonly dragCollisionInset = 0;
 
     start() {
         this.camera = this.camera || find('Main Camera')?.getComponent(Camera) || null;
@@ -76,7 +80,10 @@ export class GameManager extends Component {
         }
         for (const block of this.blocks) {
             const body = block.getComponent(RigidBody);
-            if (body) body.useGravity = false;
+            if (body) {
+                body.useGravity = false;
+                body.enabled = false;
+            }
         }
         if (!this.boardPhysical || this.blocks.length === 0) console.warn('[GameManager] Add BoardPhysical and Element block references.');
     }
@@ -91,6 +98,15 @@ export class GameManager extends Component {
         if (!this.grabbed || this.isCrushing) return;
         const constrained = this.grabbed.worldPosition.clone();
         this.keepInsideBoardColliders(this.grabbed, constrained);
+        if (!this.canPlaceWithoutOverlap(this.grabbed, constrained) && this.lastLegalDragPosition) {
+            constrained.set(
+                this.lastLegalDragPosition.x,
+                this.lastLegalDragPosition.y,
+                this.lastLegalDragPosition.z,
+            );
+        } else {
+            this.lastLegalDragPosition = constrained.clone();
+        }
         if (constrained.x !== this.grabbed.worldPosition.x || constrained.z !== this.grabbed.worldPosition.z) {
             this.grabbed.setWorldPosition(constrained);
         }
@@ -102,6 +118,7 @@ export class GameManager extends Component {
         const behaviour = block?.getComponent(Block) || null;
         if (!block || !behaviour || !behaviour.beginDrag()) return;
         this.grabbed = block;
+        this.lastLegalDragPosition = block.worldPosition.clone();
         this.dragHeight = block.worldPosition.y;
         const touchPoint = this.pointOnDragPlane(event);
         Vec3.subtract(this.dragOffset, block.worldPosition, touchPoint);
@@ -127,10 +144,22 @@ export class GameManager extends Component {
         // Complete the short follow smoothing before evaluating the drop.
         // This keeps a quick release over a gate from feeling unresponsive.
         block.getComponent(Block)?.settleDrag();
+        const released = block.worldPosition.clone();
+        this.keepInsideBoardColliders(block, released);
+        if (!this.canPlaceWithoutOverlap(block, released) && this.lastLegalDragPosition) {
+            released.set(
+                this.lastLegalDragPosition.x,
+                this.lastLegalDragPosition.y,
+                this.lastLegalDragPosition.z,
+            );
+        }
+        block.setWorldPosition(released);
+        this.lastLegalDragPosition = null;
         const shredder = this.matchingShredderDrop(block);
         if (shredder) this.crush(block, shredder);
         else {
-            this.snapBlockToGrid(block);
+            // Keep the exact legal release position. Forced grid snapping made
+            // densely packed pieces jump back into a neighbour and feel stuck.
             this.clearGateAnticipation();
             block.getComponent(Block)?.endDrag();
         }
@@ -321,11 +350,12 @@ export class GameManager extends Component {
         if (!neck) return;
         const footprintMinX = target.x + minOffsetX;
         const footprintMaxX = target.x + maxOffsetX;
-        const footprintMinZ = target.z + minOffsetZ;
-        const footprintMaxZ = target.z + maxOffsetZ;
-        const overlapsNeck = footprintMinZ < neck.maxZ && footprintMaxZ > neck.minZ;
+        // Select the H-board section from the block centre. Using footprint
+        // overlap here made an adjacent tray row count as part of the neck,
+        // while the first real neck row could count as part of the wide tray.
+        const insideNeckBand = target.z >= neck.minZ && target.z <= neck.maxZ;
         const fitsNeckWidth = footprintMinX >= neck.minX && footprintMaxX <= neck.maxX;
-        if (!overlapsNeck || fitsNeckWidth) return;
+        if (!insideNeckBand || fitsNeckWidth) return;
 
         // At a shoulder, choose the smallest legal correction. A piece moving
         // straight into the wall stays on that side; moving towards the centre
@@ -339,9 +369,12 @@ export class GameManager extends Component {
         if (neckMinX <= neckMaxX) {
             candidates.push(new Vec3(this.clamp(target.x, neckMinX, neckMaxX), target.y, target.z));
         }
-        const belowNeck = neck.minZ - maxOffsetZ;
+        // Crossing a shoulder is legal only when the *whole collider* has
+        // cleared it. Clamping the block centre to the transition still left
+        // half of the piece hanging in the side pocket/over the purple rim.
+        const belowNeck = neck.minZ - maxOffsetZ - 0.001;
         if (belowNeck >= outerMinZ) candidates.push(new Vec3(target.x, target.y, Math.min(target.z, belowNeck)));
-        const aboveNeck = neck.maxZ - minOffsetZ;
+        const aboveNeck = neck.maxZ - minOffsetZ + 0.001;
         if (aboveNeck <= outerMaxZ) candidates.push(new Vec3(target.x, target.y, Math.max(target.z, aboveNeck)));
         if (candidates.length === 0) return;
 
@@ -359,11 +392,11 @@ export class GameManager extends Component {
     }
 
     private canPlaceWithoutOverlap(dragged: Node, target: Readonly<Vec3>) {
-        const draggingRects = this.colliderRects(dragged, target);
+        const draggingRects = this.colliderRects(dragged, target, this.dragCollisionInset);
         for (const other of this.blocks) {
             if (other === dragged || !other.isValid) continue;
             for (const current of draggingRects) {
-                for (const occupied of this.colliderRects(other, other.worldPosition)) {
+                for (const occupied of this.colliderRects(other, other.worldPosition, this.dragCollisionInset)) {
                     if (this.rectanglesOverlap(current, occupied)) return false;
                 }
             }
@@ -372,52 +405,51 @@ export class GameManager extends Component {
     }
 
     /**
-     * Keeps direct finger tracking when space is clear, then slides along the
-     * free axis at an obstacle. A short sweep finds the nearest legal contact
-     * point when both axes are blocked, avoiding the old sticky/frozen drag.
+     * Sweeps toward the finger in small increments. Fast input therefore
+     * cannot tunnel through another piece, while testing each axis separately
+     * at every increment lets the held block slide through a real corridor
+     * instead of freezing because only the final finger point is occupied.
      */
     private resolveDragTarget(dragged: Node, desired: Readonly<Vec3>) {
-        const target = new Vec3(desired.x, desired.y, desired.z);
-        if (this.canPlaceWithoutOverlap(dragged, target)) return target;
+        const destination = new Vec3(desired.x, desired.y, desired.z);
+        const start = dragged.worldPosition.clone();
+        const deltaX = destination.x - start.x;
+        const deltaZ = destination.z - start.z;
+        // A quarter-cell sweep remains stable even when a browser coalesces
+        // several pointer events during a forceful drag.
+        const steps = Math.max(1, Math.ceil(Math.max(Math.abs(deltaX), Math.abs(deltaZ)) / 0.25));
+        const stepX = deltaX / steps;
+        const stepZ = deltaZ / steps;
+        let position = start;
 
-        const current = dragged.worldPosition.clone();
-        const xOnly = new Vec3(target.x, target.y, current.z);
-        const zOnly = new Vec3(current.x, target.y, target.z);
-        this.keepInsideBoardColliders(dragged, xOnly);
-        this.keepInsideBoardColliders(dragged, zOnly);
-
-        const legal: Vec3[] = [];
-        if (this.canPlaceWithoutOverlap(dragged, xOnly)) legal.push(xOnly);
-        if (this.canPlaceWithoutOverlap(dragged, zOnly)) legal.push(zOnly);
-        if (legal.length > 0) {
-            let closest = legal[0];
-            let closestDistance = this.planarDistanceSquared(closest, target);
-            for (let index = 1; index < legal.length; index++) {
-                const distance = this.planarDistanceSquared(legal[index], target);
-                if (distance < closestDistance) {
-                    closest = legal[index];
-                    closestDistance = distance;
-                }
+        for (let step = 0; step < steps; step++) {
+            const direct = new Vec3(position.x + stepX, destination.y, position.z + stepZ);
+            this.keepInsideBoardColliders(dragged, direct);
+            if (this.canPlaceWithoutOverlap(dragged, direct)) {
+                position = direct;
+                continue;
             }
-            return closest;
-        }
 
-        let low = 0;
-        let high = 1;
-        let lastLegal = current;
-        for (let step = 0; step < 7; step++) {
-            const amount = (low + high) * 0.5;
-            const candidate = new Vec3();
-            Vec3.lerp(candidate, current, target, amount);
-            this.keepInsideBoardColliders(dragged, candidate);
-            if (this.canPlaceWithoutOverlap(dragged, candidate)) {
-                low = amount;
-                lastLegal = candidate;
-            } else {
-                high = amount;
+            const sliding: Vec3[] = [];
+            if (Math.abs(stepX) > 0.0001) {
+                const xOnly = new Vec3(position.x + stepX, destination.y, position.z);
+                this.keepInsideBoardColliders(dragged, xOnly);
+                if (this.canPlaceWithoutOverlap(dragged, xOnly)) sliding.push(xOnly);
             }
+            if (Math.abs(stepZ) > 0.0001) {
+                const zOnly = new Vec3(position.x, destination.y, position.z + stepZ);
+                this.keepInsideBoardColliders(dragged, zOnly);
+                if (this.canPlaceWithoutOverlap(dragged, zOnly)) sliding.push(zOnly);
+            }
+            if (sliding.length === 0) break;
+
+            position = sliding.reduce((best, candidate) =>
+                this.planarDistanceSquared(candidate, destination) < this.planarDistanceSquared(best, destination)
+                    ? candidate
+                    : best,
+            );
         }
-        return lastLegal;
+        return position;
     }
 
     private planarDistanceSquared(a: Readonly<Vec3>, b: Readonly<Vec3>) {
@@ -508,25 +540,80 @@ export class GameManager extends Component {
             minZ: Math.max(...lowerShoulders.map((wall) => wall.maxZ)),
             maxZ: Math.min(...upperShoulders.map((wall) => wall.minZ)),
         };
-        return neck.minX < neck.maxX && neck.minZ < neck.maxZ ? { outer, neck } : { outer, neck: null };
+        if (neck.minX >= neck.maxX || neck.minZ >= neck.maxZ) return { outer, neck: null };
+
+        // The imported BoardPhysical shoulders predate this authored layout
+        // and are offset along Z. Calibrate only the two neck transitions from
+        // the initial rows: neck rows contain multiple blocks whose centres all
+        // fit between the shoulder tips; tray rows contain outer columns.
+        const rows: Array<{ z: number; xs: number[] }> = [];
+        for (const block of this.blocks) {
+            if (!block?.isValid) continue;
+            const position = block.worldPosition;
+            let row = rows.find((candidate) => Math.abs(candidate.z - position.z) < 0.25);
+            if (!row) {
+                row = { z: position.z, xs: [] };
+                rows.push(row);
+            }
+            row.xs.push(position.x);
+        }
+        const neckRows = rows.filter((row) => row.xs.length >= 2
+            && row.xs.every((x) => x >= neck.minX && x <= neck.maxX));
+        if (neckRows.length > 0) {
+            const lowestNeckRow = Math.min(...neckRows.map((row) => row.z));
+            const highestNeckRow = Math.max(...neckRows.map((row) => row.z));
+            const wideRows = rows.filter((row) => row.xs.some((x) => x < neck.minX || x > neck.maxX));
+            const rowBelow = wideRows
+                .filter((row) => row.z < lowestNeckRow)
+                .sort((a, b) => b.z - a.z)[0];
+            const rowAbove = wideRows
+                .filter((row) => row.z > highestNeckRow)
+                .sort((a, b) => a.z - b.z)[0];
+            if (rowBelow) neck.minZ = (rowBelow.z + lowestNeckRow) * 0.5;
+            if (rowAbove) neck.maxZ = (rowAbove.z + highestNeckRow) * 0.5;
+        }
+        return { outer, neck };
     }
 
     private clamp(value: number, min: number, max: number) {
         return Math.max(min, Math.min(max, value));
     }
 
-    private colliderRects(root: Node, rootPosition: Readonly<Vec3>): Rect[] {
+    private colliderRects(root: Node, rootPosition: Readonly<Vec3>, inset = 0): Rect[] {
         const colliders = root.getComponents(BoxCollider);
         if (colliders.length === 0) return [{ minX: rootPosition.x - 0.9, maxX: rootPosition.x + 0.9, minZ: rootPosition.z - 0.9, maxZ: rootPosition.z + 0.9 }];
         const delta = new Vec3();
         Vec3.subtract(delta, rootPosition, root.worldPosition);
         return colliders.map((collider) => {
-            const bounds = this.worldBounds(collider);
+            // Rigid-body simulation is disabled for transform-driven pieces.
+            // Physics worldBounds may therefore lag one frame behind the node,
+            // so build the AABB from the collider's authored box and the live
+            // node world matrix instead.
+            const center = collider.center;
+            const halfX = collider.size.x * 0.5;
+            const halfY = collider.size.y * 0.5;
+            const halfZ = collider.size.z * 0.5;
+            let minX = Number.POSITIVE_INFINITY;
+            let maxX = Number.NEGATIVE_INFINITY;
+            let minZ = Number.POSITIVE_INFINITY;
+            let maxZ = Number.NEGATIVE_INFINITY;
+            for (const x of [-halfX, halfX]) {
+                for (const y of [-halfY, halfY]) {
+                    for (const z of [-halfZ, halfZ]) {
+                        const corner = new Vec3(center.x + x, center.y + y, center.z + z);
+                        Vec3.transformMat4(corner, corner, collider.node.worldMatrix);
+                        minX = Math.min(minX, corner.x);
+                        maxX = Math.max(maxX, corner.x);
+                        minZ = Math.min(minZ, corner.z);
+                        maxZ = Math.max(maxZ, corner.z);
+                    }
+                }
+            }
             return {
-                minX: bounds.minX + delta.x - 0.03,
-                maxX: bounds.maxX + delta.x + 0.03,
-                minZ: bounds.minZ + delta.z - 0.03,
-                maxZ: bounds.maxZ + delta.z + 0.03,
+                minX: minX + delta.x + inset,
+                maxX: maxX + delta.x - inset,
+                minZ: minZ + delta.z + inset,
+                maxZ: maxZ + delta.z - inset,
             };
         });
     }

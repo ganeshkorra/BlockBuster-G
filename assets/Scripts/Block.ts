@@ -22,7 +22,15 @@ export class Block extends Component {
 
     onLoad() {
         this.body = this.getComponent(RigidBody);
-        if (this.body) this.body.useGravity = false;
+        if (this.body) {
+            // Dragging is transform-driven and board legality is handled by
+            // GameManager. Disable rigid-body simulation completely so moving
+            // one collider cannot shove a chain of neighbouring blocks. The
+            // BoxCollider remains enabled for picking and footprint checks.
+            this.body.useGravity = false;
+            this.body.enabled = false;
+            this.body = null;
+        }
     }
 
     get isDragging() { return this.dragging; }
@@ -53,16 +61,10 @@ export class Block extends Component {
         // Lift the held block above its board cells so the placement footprint
         // is visible underneath, as in the reference interaction.
         this.dragTarget = new Vec3(position.x, this.dragBaseY + this.dragLift, position.z);
-    }
-
-    update(deltaTime: number) {
-        if (!this.dragging || !this.dragTarget || this.consuming) return;
-        // Frame-rate-independent smoothing: the block catches up quickly but
-        // never jerks between uneven touch-move events.
-        const follow = 1 - Math.exp(-24 * deltaTime);
-        const next = new Vec3();
-        Vec3.lerp(next, this.node.worldPosition, this.dragTarget, follow);
-        this.node.setWorldPosition(next);
+        // GameManager has already swept and collision-resolved this position.
+        // Apply it immediately so a delayed diagonal follow cannot repeatedly
+        // collide with a corner and make the block feel frozen.
+        this.node.setWorldPosition(this.dragTarget);
         this.updateFootprintTiles();
     }
 
