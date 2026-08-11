@@ -9,6 +9,7 @@ const { ccclass, property } = _decorator;
 
 type Bounds3D = { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number };
 type Rect = { minX: number; maxX: number; minZ: number; maxZ: number };
+type BoardShape = { outer: Rect; neck: Rect | null };
 
 /** One independently configurable colour/type. Its node arrays are the level authoring interface. */
 @ccclass('GameElement')
@@ -34,6 +35,7 @@ export class GameManager extends Component {
 
     private blocks: Node[] = [];
     private boardPhysical: Node | null = null;
+    private boardShape: BoardShape | null = null;
     private grabbed: Node | null = null;
     private anticipated: Shredder | null = null;
     private isCrushing = false;
@@ -65,6 +67,7 @@ export class GameManager extends Component {
         let sceneRoot: Node = this.node;
         while (sceneRoot.parent) sceneRoot = sceneRoot.parent;
         this.boardPhysical = this.findDescendant(sceneRoot, 'BoardPhysical');
+        this.boardShape = null;
         this.blocks = [];
         for (const element of this.elements) {
             for (const block of element.blockNodes) {
@@ -81,8 +84,8 @@ export class GameManager extends Component {
     /**
      * Block follows are smoothed in Block.update(), after touch input has been
      * processed. Clamp the final world position too: this closes the one-frame
-     * escape that can happen on a very fast drag. The four authored
-     * BoardPhysical BoxColliders remain the only boundary data used here.
+     * escape that can happen on a very fast drag. The authored BoardPhysical
+     * wall colliders remain the only boundary data used here.
      */
     lateUpdate() {
         if (!this.grabbed || this.isCrushing) return;
@@ -292,22 +295,67 @@ export class GameManager extends Component {
     }
 
     /**
-     * The four BoxColliders authored on BoardPhysical are the only source of
-     * truth for the board boundary. Their inner faces define the legal area;
-     * no board dimensions or wall offsets are duplicated in code.
+     * Keeps the complete block footprint inside the board silhouette. Physics
+     * cannot do this by itself because dragging writes world transforms
+     * directly. The outer limits and the narrow middle section are derived
+     * from the authored wall colliders, so the H-board dimensions are not
+     * duplicated in code.
      */
     private keepInsideBoardColliders(block: Node, target: Vec3) {
-        const board = this.readBoardInterior();
+        const board = this.boardShape || (this.boardShape = this.readBoardShape());
         if (!board) return;
         const rects = this.colliderRects(block, target);
-        const minX = Math.min(...rects.map((rect) => rect.minX));
-        const maxX = Math.max(...rects.map((rect) => rect.maxX));
-        const minZ = Math.min(...rects.map((rect) => rect.minZ));
-        const maxZ = Math.max(...rects.map((rect) => rect.maxZ));
-        if (minX < board.minX) target.x += board.minX - minX;
-        if (maxX > board.maxX) target.x -= maxX - board.maxX;
-        if (minZ < board.minZ) target.z += board.minZ - minZ;
-        if (maxZ > board.maxZ) target.z -= maxZ - board.maxZ;
+        const minOffsetX = Math.min(...rects.map((rect) => rect.minX)) - target.x;
+        const maxOffsetX = Math.max(...rects.map((rect) => rect.maxX)) - target.x;
+        const minOffsetZ = Math.min(...rects.map((rect) => rect.minZ)) - target.z;
+        const maxOffsetZ = Math.max(...rects.map((rect) => rect.maxZ)) - target.z;
+
+        const outerMinX = board.outer.minX - minOffsetX;
+        const outerMaxX = board.outer.maxX - maxOffsetX;
+        const outerMinZ = board.outer.minZ - minOffsetZ;
+        const outerMaxZ = board.outer.maxZ - maxOffsetZ;
+        target.x = this.clamp(target.x, outerMinX, outerMaxX);
+        target.z = this.clamp(target.z, outerMinZ, outerMaxZ);
+
+        const neck = board.neck;
+        if (!neck) return;
+        const footprintMinX = target.x + minOffsetX;
+        const footprintMaxX = target.x + maxOffsetX;
+        const footprintMinZ = target.z + minOffsetZ;
+        const footprintMaxZ = target.z + maxOffsetZ;
+        const overlapsNeck = footprintMinZ < neck.maxZ && footprintMaxZ > neck.minZ;
+        const fitsNeckWidth = footprintMinX >= neck.minX && footprintMaxX <= neck.maxX;
+        if (!overlapsNeck || fitsNeckWidth) return;
+
+        // At a shoulder, choose the smallest legal correction. A piece moving
+        // straight into the wall stays on that side; moving towards the centre
+        // lets it slide naturally into the neck.
+        const desiredX = target.x;
+        const desiredZ = target.z;
+        const desired = new Vec3(desiredX, target.y, desiredZ);
+        const candidates: Vec3[] = [];
+        const neckMinX = neck.minX - minOffsetX;
+        const neckMaxX = neck.maxX - maxOffsetX;
+        if (neckMinX <= neckMaxX) {
+            candidates.push(new Vec3(this.clamp(target.x, neckMinX, neckMaxX), target.y, target.z));
+        }
+        const belowNeck = neck.minZ - maxOffsetZ;
+        if (belowNeck >= outerMinZ) candidates.push(new Vec3(target.x, target.y, Math.min(target.z, belowNeck)));
+        const aboveNeck = neck.maxZ - minOffsetZ;
+        if (aboveNeck <= outerMaxZ) candidates.push(new Vec3(target.x, target.y, Math.max(target.z, aboveNeck)));
+        if (candidates.length === 0) return;
+
+        let best = candidates[0];
+        let bestDistance = this.planarDistanceSquared(best, desired);
+        for (let index = 1; index < candidates.length; index++) {
+            const distance = this.planarDistanceSquared(candidates[index], desired);
+            if (distance < bestDistance) {
+                best = candidates[index];
+                bestDistance = distance;
+            }
+        }
+        target.x = best.x;
+        target.z = best.z;
     }
 
     private canPlaceWithoutOverlap(dragged: Node, target: Readonly<Vec3>) {
@@ -413,29 +461,58 @@ export class GameManager extends Component {
         if (best) block.setWorldPosition(best);
     }
 
-    private readBoardInterior(): Rect | null {
+    private readBoardShape(): BoardShape | null {
         if (!this.boardPhysical) return null;
-        let minX = Number.NEGATIVE_INFINITY, maxX = Number.POSITIVE_INFINITY;
-        let minZ = Number.NEGATIVE_INFINITY, maxZ = Number.POSITIVE_INFINITY;
-        let xWalls = false, zWalls = false;
         const origin = this.boardPhysical.worldPosition;
-        for (const wall of this.boardPhysical.getComponents(BoxCollider)) {
-            const bounds = this.worldBounds(wall);
+        const verticalWalls: Bounds3D[] = [];
+        const horizontalWalls: Bounds3D[] = [];
+        for (const collider of this.boardPhysical.getComponents(BoxCollider)) {
+            const bounds = this.worldBounds(collider);
             const centerX = (bounds.minX + bounds.maxX) * 0.5;
             const centerZ = (bounds.minZ + bounds.maxZ) * 0.5;
             const halfX = (bounds.maxX - bounds.minX) * 0.5;
             const halfZ = (bounds.maxZ - bounds.minZ) * 0.5;
-            if (halfX < halfZ) {
-                xWalls = true;
-                if (centerX < origin.x) minX = Math.max(minX, centerX + halfX);
-                else maxX = Math.min(maxX, centerX - halfX);
-            } else {
-                zWalls = true;
-                if (centerZ < origin.z) minZ = Math.max(minZ, centerZ + halfZ);
-                else maxZ = Math.min(maxZ, centerZ - halfZ);
-            }
+            if (halfX < halfZ && centerX !== origin.x) verticalWalls.push(bounds);
+            else if (halfZ < halfX && centerZ !== origin.z) horizontalWalls.push(bounds);
         }
-        return xWalls && zWalls ? { minX, maxX, minZ, maxZ } : null;
+        const leftWalls = verticalWalls.filter((wall) => (wall.minX + wall.maxX) * 0.5 < origin.x);
+        const rightWalls = verticalWalls.filter((wall) => (wall.minX + wall.maxX) * 0.5 > origin.x);
+        if (leftWalls.length === 0 || rightWalls.length === 0 || horizontalWalls.length < 2) return null;
+
+        horizontalWalls.sort((a, b) => (a.minZ + a.maxZ) - (b.minZ + b.maxZ));
+        const bottomWall = horizontalWalls[0];
+        const topWall = horizontalWalls[horizontalWalls.length - 1];
+        const outer: Rect = {
+            minX: Math.max(...leftWalls.map((wall) => wall.maxX)),
+            maxX: Math.min(...rightWalls.map((wall) => wall.minX)),
+            minZ: bottomWall.maxZ,
+            maxZ: topWall.minZ,
+        };
+
+        // The remaining horizontal wall segments are the two shoulders of an
+        // H-shaped board. Their inward tips define a conservative rectangular
+        // neck that no block footprint may cross outside of.
+        const shoulders = horizontalWalls.slice(1, -1);
+        const shoulderCentersZ = shoulders.map((wall) => (wall.minZ + wall.maxZ) * 0.5);
+        const shoulderSplitZ = (Math.min(...shoulderCentersZ) + Math.max(...shoulderCentersZ)) * 0.5;
+        const lowerShoulders = shoulders.filter((wall) => (wall.minZ + wall.maxZ) * 0.5 < shoulderSplitZ);
+        const upperShoulders = shoulders.filter((wall) => lowerShoulders.indexOf(wall) === -1);
+        const leftShoulders = shoulders.filter((wall) => (wall.minX + wall.maxX) * 0.5 < origin.x);
+        const rightShoulders = shoulders.filter((wall) => (wall.minX + wall.maxX) * 0.5 > origin.x);
+        if (lowerShoulders.length === 0 || upperShoulders.length === 0 || leftShoulders.length === 0 || rightShoulders.length === 0) {
+            return { outer, neck: null };
+        }
+        const neck: Rect = {
+            minX: Math.max(...leftShoulders.map((wall) => wall.maxX)),
+            maxX: Math.min(...rightShoulders.map((wall) => wall.minX)),
+            minZ: Math.max(...lowerShoulders.map((wall) => wall.maxZ)),
+            maxZ: Math.min(...upperShoulders.map((wall) => wall.minZ)),
+        };
+        return neck.minX < neck.maxX && neck.minZ < neck.maxZ ? { outer, neck } : { outer, neck: null };
+    }
+
+    private clamp(value: number, min: number, max: number) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private colliderRects(root: Node, rootPosition: Readonly<Vec3>): Rect[] {
@@ -558,7 +635,8 @@ export class GameManager extends Component {
     }
 
     private findDescendant(root: Node, name: string): Node | null {
-        if (root.name === name) return root;
+        // Imported/model-mounted helper nodes commonly receive a -001 suffix.
+        if (root.name === name || root.name.startsWith(`${name}-`)) return root;
         for (const child of root.children) {
             const match = this.findDescendant(child, name);
             if (match) return match;
