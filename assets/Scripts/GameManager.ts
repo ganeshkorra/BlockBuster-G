@@ -1,5 +1,5 @@
 import {
-    _decorator, BoxCollider, Camera, Color, Component, EventTouch, find, geometry, Input, input,
+    _decorator, Animation, BoxCollider, Camera, Color, Component, EventTouch, find, geometry, Input, input,
     Material, MeshRenderer, Node, PhysicsSystem, RigidBody, Tween, tween, Vec3,
 } from 'cc';
 import { Block } from './Block';
@@ -33,6 +33,9 @@ export class GameManager extends Component {
     @property({ type: [GameElement], tooltip: 'Add one Element for each block colour/type in a level.' })
     elements: GameElement[] = [];
 
+    @property({ type: Node, tooltip: 'Parent node containing tutorial hand children: Idle and Click.' })
+    hand: Node | null = null;
+
     private blocks: Node[] = [];
     private boardPhysical: Node | null = null;
     private boardShape: BoardShape | null = null;
@@ -47,6 +50,10 @@ export class GameManager extends Component {
     /** Use the complete authored collider; a positive inset permits visible penetration. */
     private readonly dragCollisionInset = 0;
 
+    // Tutorial hand state
+    private tutorialHandActive = false;
+    private tutorialHandPulseFn: (() => void) | null = null;
+
     start() {
         this.camera = this.camera || find('Main Camera')?.getComponent(Camera) || null;
         this.refreshSceneReferences();
@@ -54,6 +61,8 @@ export class GameManager extends Component {
         input.on(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
         input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.on(Input.EventType.TOUCH_CANCEL, this.onTouchCancel, this);
+        // Start tutorial hand demo (idle/click pulse) until the player begins interaction.
+        if (this.hand) this.startTutorialHand();
     }
 
     onDestroy() {
@@ -61,6 +70,34 @@ export class GameManager extends Component {
         input.off(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
         input.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.off(Input.EventType.TOUCH_CANCEL, this.onTouchCancel, this);
+        this.stopTutorialHand();
+    }
+
+    private startTutorialHand() {
+        if (!this.hand) return;
+        this.tutorialHandActive = true;
+        this.showHandIdle();
+        // Pulse function: show click briefly, then return to idle.
+        this.tutorialHandPulseFn = () => {
+            if (!this.tutorialHandActive) return;
+            this.showHandClick();
+            this.scheduleOnce(() => {
+                if (!this.tutorialHandActive) return;
+                this.showHandIdle();
+            }, 0.42);
+        };
+        // Run immediately and then repeat every 1.6s.
+        this.tutorialHandPulseFn();
+        this.schedule(this.tutorialHandPulseFn, 1.6);
+    }
+
+    private stopTutorialHand() {
+        this.tutorialHandActive = false;
+        if (this.tutorialHandPulseFn) {
+            try { this.unschedule(this.tutorialHandPulseFn); } catch (_) { /* ignore */ }
+            this.tutorialHandPulseFn = null;
+        }
+        this.hideHand();
     }
 
     /** Rebuilds runtime state exclusively from the Elements inspector arrays. */
@@ -118,6 +155,8 @@ export class GameManager extends Component {
         const behaviour = block?.getComponent(Block) || null;
         if (!block || !behaviour || !behaviour.beginDrag()) return;
         this.grabbed = block;
+        // Player has begun interacting; hide the tutorial hand.
+        this.stopTutorialHand();
         this.lastLegalDragPosition = block.worldPosition.clone();
         this.dragHeight = block.worldPosition.y;
         const touchPoint = this.pointOnDragPlane(event);
@@ -231,6 +270,95 @@ export class GameManager extends Component {
         if (!this.anticipated) return;
         this.anticipated.setAnticipation(false, null);
         this.anticipated = null;
+    }
+
+    private setHandChildState(childName: string, active: boolean) {
+        if (!this.hand || !this.hand.isValid) return;
+        let child = this.hand.getChildByName(childName);
+        if (!child) {
+            const lname = childName.toLowerCase();
+            const findDesc = (node: Node): Node | null => {
+                for (const c of node.children) {
+                    if (c.name.toLowerCase().includes(lname)) return c;
+                    const r = findDesc(c);
+                    if (r) return r;
+                }
+                return null;
+            };
+            child = findDesc(this.hand);
+        }
+        if (!child) {
+            // If children are named arbitrarily (e.g. "Quad", "Quad-001"),
+            // map 'Idle' -> first child and 'Click' -> second child as a sensible default.
+            const lname = childName.toLowerCase();
+            const children = this.hand.children;
+            if (children.length > 0) {
+                if (lname.includes('idle')) child = children[0];
+                else if (lname.includes('click')) child = children[1] || children[0];
+                else child = children[0];
+            }
+
+            // Still not found? fallback to first descendant with an Animation.
+            if (!child) {
+                let foundAnimNode: Node | null = null;
+                const findAnim = (node: Node) => {
+                    for (const c of node.children) {
+                        if (c.getComponent(Animation)) { foundAnimNode = c; return; }
+                        findAnim(c);
+                        if (foundAnimNode) return;
+                    }
+                };
+                findAnim(this.hand);
+                if (foundAnimNode) child = foundAnimNode;
+            }
+
+            if (!child) {
+                console.warn('[GameManager] hand child not found and no fallback available:', childName);
+                return;
+            }
+        }
+        // Ensure parent is active when showing a child so visuals are visible.
+        if (active && (!this.hand.isValid || !this.hand.active)) this.hand.active = true;
+        child.active = active;
+        const anim = child.getComponent(Animation);
+        if (anim) {
+            if (active) anim.play();
+            else anim.stop();
+        } else {
+            const parentAnim = this.hand.getComponent(Animation);
+            if (parentAnim) {
+                try {
+                    if (active) {
+                        try {
+                            parentAnim.play(childName);
+                        } catch (_) {
+                            parentAnim.play();
+                        }
+                    } else {
+                        parentAnim.stop();
+                    }
+                } catch (_) { /* ignore */ }
+            }
+        }
+    }
+
+    public showHandIdle() {
+        if (!this.hand || !this.hand.isValid) return;
+        this.hand.active = true;
+        this.setHandChildState('Idle', true);
+        this.setHandChildState('Click', false);
+    }
+
+    public showHandClick() {
+        if (!this.hand || !this.hand.isValid) return;
+        this.hand.active = true;
+        this.setHandChildState('Idle', false);
+        this.setHandChildState('Click', true);
+    }
+
+    public hideHand() {
+        if (!this.hand || !this.hand.isValid) return;
+        this.hand.active = false;
     }
 
     private distanceToDropArea(block: Node, shredder: Node) {
