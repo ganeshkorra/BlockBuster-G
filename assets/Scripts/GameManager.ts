@@ -80,12 +80,32 @@ export class GameManager extends Component {
         // Pulse function: show click briefly, then return to idle.
         this.tutorialHandPulseFn = () => {
             if (!this.tutorialHandActive) return;
+            // Idle -> Click
             this.showHandClick();
+
+            // Simulate a short press then a drag motion, then return to idle.
+            const dragOutDuration = 0.28;
+            const dragBackDuration = 0.28;
+            const totalDrag = dragOutDuration + dragBackDuration;
+
+            // Choose a small local offset to read as a drag gesture. Adjust as needed.
+            const home = this.hand.position.clone();
+            const dragOffset = new Vec3(0, -0.3, -0.3);
+
+            // Start drag tween: out then back.
+            Tween.stopAllByTarget(this.hand);
+            tween(this.hand)
+                .to(dragOutDuration, { position: home.clone().add(dragOffset) }, { easing: 'sineOut' })
+                .to(dragBackDuration, { position: home }, { easing: 'sineIn' })
+                .start();
+
+            // After the drag completes, go to idle.
             this.scheduleOnce(() => {
                 if (!this.tutorialHandActive) return;
                 this.showHandIdle();
-            }, 0.42);
+            }, totalDrag);
         };
+
         // Run immediately and then repeat every 1.6s.
         this.tutorialHandPulseFn();
         this.schedule(this.tutorialHandPulseFn, 1.6);
@@ -97,6 +117,8 @@ export class GameManager extends Component {
             try { this.unschedule(this.tutorialHandPulseFn); } catch (_) { /* ignore */ }
             this.tutorialHandPulseFn = null;
         }
+        // Stop any running hand tweens and hide.
+        try { Tween.stopAllByTarget(this.hand); } catch (_) { /* ignore */ }
         this.hideHand();
     }
 
