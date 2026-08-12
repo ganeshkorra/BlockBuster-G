@@ -87,7 +87,8 @@
         "b": 12,
         "a": 255
       },
-      "roughness": 0.36,
+      "roughness": 0.708,
+      "metallic": 0.45,
       "specularIntensity": 0.52
     },
     {},
