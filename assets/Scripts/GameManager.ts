@@ -36,6 +36,9 @@ export class GameManager extends Component {
     @property({ type: Node, tooltip: 'Parent node containing tutorial hand children: Idle and Click.' })
     hand: Node | null = null;
 
+    @property({ type: Node, tooltip: 'Call-to-action node shown when game time expires.' })
+    cta: Node | null = null;
+
     private blocks: Node[] = [];
     private boardPhysical: Node | null = null;
     private boardShape: BoardShape | null = null;
@@ -54,6 +57,12 @@ export class GameManager extends Component {
     private tutorialHandActive = false;
     private tutorialHandPulseFn: (() => void) | null = null;
 
+    // Game timer state
+    private gameTimeElapsed = 0;
+    private readonly gameTimeDuration = 35; // seconds
+    private gameTimeActive = false;
+    private gameTimeStarted = false;
+
     start() {
         this.camera = this.camera || find('Main Camera')?.getComponent(Camera) || null;
         this.refreshSceneReferences();
@@ -63,6 +72,21 @@ export class GameManager extends Component {
         input.on(Input.EventType.TOUCH_CANCEL, this.onTouchCancel, this);
         // Start tutorial hand demo (idle/click pulse) until the player begins interaction.
         if (this.hand) this.startTutorialHand();
+        // Initialize game timer state (timer will start on first player interaction).
+        this.gameTimeElapsed = 0;
+        this.gameTimeActive = false;
+        this.gameTimeStarted = false;
+        // Ensure CTA is inactive at start.
+        if (this.cta && this.cta.isValid) this.cta.active = false;
+    }
+
+    update(deltaTime: number) {
+        if (!this.gameTimeActive) return;
+        this.gameTimeElapsed += deltaTime;
+        if (this.gameTimeElapsed >= this.gameTimeDuration) {
+            this.gameTimeActive = false;
+            this.showCTA();
+        }
     }
 
     onDestroy() {
@@ -71,6 +95,7 @@ export class GameManager extends Component {
         input.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.off(Input.EventType.TOUCH_CANCEL, this.onTouchCancel, this);
         this.stopTutorialHand();
+        this.gameTimeActive = false;
     }
 
     private startTutorialHand() {
@@ -172,6 +197,13 @@ export class GameManager extends Component {
     }
 
     private onTouchStart(event: EventTouch) {
+        // Start game timer on first player interaction.
+        if (!this.gameTimeStarted) {
+            this.gameTimeStarted = true;
+            this.gameTimeActive = true;
+            this.gameTimeElapsed = 0;
+        }
+        
         if (this.isCrushing || this.grabbed) return;
         const block = this.pickBlock(event);
         const behaviour = block?.getComponent(Block) || null;
@@ -381,6 +413,17 @@ export class GameManager extends Component {
     public hideHand() {
         if (!this.hand || !this.hand.isValid) return;
         this.hand.active = false;
+    }
+
+    private showCTA() {
+        if (!this.cta || !this.cta.isValid) return;
+        this.cta.active = true;
+        // Stop player input when CTA is shown.
+        this.gameTimeActive = false;
+    }
+
+    public getRemainingGameTime(): number {
+        return Math.max(0, this.gameTimeDuration - this.gameTimeElapsed);
     }
 
     private distanceToDropArea(block: Node, shredder: Node) {
