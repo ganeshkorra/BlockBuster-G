@@ -11767,6 +11767,9 @@
     "cta": {
       "__id__": 847
     },
+    "boardColumns": 7,
+    "boardRows": 12,
+    "gridCellSize": 2,
     "_id": "40utQI15VNS4c36ya2kzt1"
   },
   {
@@ -13275,10 +13278,10 @@
     "_dstBlendFactor": 4,
     "_color": {
       "__type__": "cc.Color",
-      "r": 46,
-      "g": 39,
-      "b": 39,
-      "a": 189
+      "r": 0,
+      "g": 0,
+      "b": 0,
+      "a": 255
     },
     "_spriteFrame": {
       "__uuid__": "7d8f9b89-4fd1-4c9f-a3ab-38ec7cded7ca@f9941",

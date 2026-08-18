@@ -10,6 +10,7 @@ const { ccclass, property } = _decorator;
 type Bounds3D = { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number };
 type Rect = { minX: number; maxX: number; minZ: number; maxZ: number };
 type BoardShape = { outer: Rect; neck: Rect | null };
+type GridCell = { column: number; row: number; x: number; z: number };
 
 /** One independently configurable colour/type. Its node arrays are the level authoring interface. */
 @ccclass('GameElement')
@@ -39,9 +40,21 @@ export class GameManager extends Component {
     @property({ type: Node, tooltip: 'Call-to-action node shown when game time expires.' })
     cta: Node | null = null;
 
+    @property({ tooltip: 'Fallback column count when a scene has no authored one-cell blocks.' })
+    boardColumns = 7;
+
+    @property({ tooltip: 'Fallback row count when a scene has no authored one-cell blocks.' })
+    boardRows = 12;
+
+    @property({ tooltip: 'Fallback spacing when grid centres cannot be derived from the scene.' })
+    gridCellSize = 2;
+
     private blocks: Node[] = [];
     private boardPhysical: Node | null = null;
     private boardShape: BoardShape | null = null;
+    private gridCells: GridCell[] = [];
+    private gridUnitWidth = 0;
+    private gridUnitDepth = 0;
     private grabbed: Node | null = null;
     private anticipated: Shredder | null = null;
     private isCrushing = false;
@@ -50,6 +63,10 @@ export class GameManager extends Component {
     private dragOffset = new Vec3();
     /** Last displayed position whose complete collider did not overlap another block. */
     private lastLegalDragPosition: Vec3 | null = null;
+    /** Grid position occupied before the current drag, used as a safe fallback. */
+    private dragStartGridPosition: Vec3 | null = null;
+    /** Keeps multi-cell pieces aligned to their authored grid phase. */
+    private dragGridOffset = new Vec3();
     /** Use the complete authored collider; a positive inset permits visible penetration. */
     private readonly dragCollisionInset = 0;
 
@@ -169,6 +186,11 @@ export class GameManager extends Component {
                 body.enabled = false;
             }
         }
+        // Cache the authored board outline before creating its logical cells.
+        // readBoardShape() uses the initial block rows to calibrate the H-shaped
+        // neck, so it must run while every piece is still in its scene position.
+        this.boardShape = this.readBoardShape();
+        this.rebuildBoardGrid();
         if (!this.boardPhysical || this.blocks.length === 0) console.warn('[GameManager] Add BoardPhysical and Element block references.');
     }
 
@@ -212,6 +234,8 @@ export class GameManager extends Component {
         // Player has begun interacting; hide the tutorial hand.
         this.stopTutorialHand();
         this.lastLegalDragPosition = block.worldPosition.clone();
+        this.dragStartGridPosition = block.worldPosition.clone();
+        this.dragGridOffset.set(this.gridOffsetForBlock(block));
         this.dragHeight = block.worldPosition.y;
         const touchPoint = this.pointOnDragPlane(event);
         Vec3.subtract(this.dragOffset, block.worldPosition, touchPoint);
@@ -226,7 +250,11 @@ export class GameManager extends Component {
         target.z += this.dragOffset.z;
         this.keepInsideBoardColliders(block, target);
         const resolved = this.resolveDragTarget(block, target);
-        block.getComponent(Block)?.moveTo(resolved);
+        const behaviour = block.getComponent(Block);
+        behaviour?.moveTo(resolved);
+        // The block follows the finger freely, while its glow shows the exact
+        // cell that will receive it on release.
+        behaviour?.previewPlacementAt(this.nearestGridPlacement(block, resolved, true));
         this.updateGateAnticipation(block);
     }
 
@@ -249,12 +277,25 @@ export class GameManager extends Component {
         block.setWorldPosition(released);
         this.lastLegalDragPosition = null;
         const shredder = this.matchingShredderDrop(block);
-        if (shredder) this.crush(block, shredder);
+        if (shredder) {
+            this.dragStartGridPosition = null;
+            this.dragGridOffset.set(Vec3.ZERO);
+            this.crush(block, shredder);
+        }
         else {
-            // Keep the exact legal release position. Forced grid snapping made
-            // densely packed pieces jump back into a neighbour and feel stuck.
+            // Place only on a legal, unoccupied cell. When every nearby cell is
+            // occupied, the original cell remains a guaranteed, predictable
+            // fallback instead of leaving the block between rows or columns.
+            const placement = this.nearestGridPlacement(block, released, true)
+                || (this.dragStartGridPosition
+                    ? this.nearestGridPlacement(block, this.dragStartGridPosition, true)
+                    : null)
+                || this.dragStartGridPosition
+                || released;
+            this.dragStartGridPosition = null;
+            this.dragGridOffset.set(Vec3.ZERO);
             this.clearGateAnticipation();
-            block.getComponent(Block)?.endDrag();
+            block.getComponent(Block)?.endDragAt(placement);
         }
     }
 
@@ -652,38 +693,121 @@ export class GameManager extends Component {
     }
 
     /**
-     * Drops pieces onto the nearest unoccupied grid position. The board's
-     * centre defines the grid origin, so authored BoardPhysical colliders stay
-     * the only board configuration required by this scene.
+     * Creates the logical board from the small authored blocks. This preserves
+     * hand-tuned row spacing in the H-shaped playable while the inspector
+     * column/row settings remain a fallback for an empty level.
      */
-    private snapBlockToGrid(block: Node) {
-        const current = block.worldPosition;
-        const origin = this.boardPhysical?.worldPosition || Vec3.ZERO;
-        const baseX = Math.round(current.x - origin.x) + origin.x;
-        const baseZ = Math.round(current.z - origin.z) + origin.z;
-        let best: Vec3 | null = null;
-        let bestDistance = Number.POSITIVE_INFINITY;
+    private rebuildBoardGrid() {
+        this.gridCells = [];
+        if (!this.boardPhysical) return;
 
-        // Try the closest cell first, then a small ring around it when that
-        // cell is occupied. This prevents a release from landing half-on a
-        // neighbouring button or overlapping another block.
-        for (let radius = 0; radius <= 2; radius++) {
-            for (let xOffset = -radius; xOffset <= radius; xOffset++) {
-                for (let zOffset = -radius; zOffset <= radius; zOffset++) {
-                    if (Math.max(Math.abs(xOffset), Math.abs(zOffset)) !== radius) continue;
-                    const candidate = new Vec3(baseX + xOffset, current.y, baseZ + zOffset);
-                    this.keepInsideBoardColliders(block, candidate);
-                    if (!this.canPlaceWithoutOverlap(block, candidate)) continue;
-                    const distance = this.planarDistanceSquared(candidate, current);
-                    if (distance < bestDistance) {
-                        best = candidate;
-                        bestDistance = distance;
-                    }
+        const measured = this.blocks.map((block) => {
+            const rects = this.colliderRects(block, block.worldPosition);
+            const minX = Math.min(...rects.map((rect) => rect.minX));
+            const maxX = Math.max(...rects.map((rect) => rect.maxX));
+            const minZ = Math.min(...rects.map((rect) => rect.minZ));
+            const maxZ = Math.max(...rects.map((rect) => rect.maxZ));
+            return { block, width: maxX - minX, depth: maxZ - minZ };
+        });
+        this.gridUnitWidth = measured.length > 0 ? Math.min(...measured.map((entry) => entry.width)) : 0;
+        this.gridUnitDepth = measured.length > 0 ? Math.min(...measured.map((entry) => entry.depth)) : 0;
+        const unitBlocks = measured.filter((entry) =>
+            entry.width <= this.gridUnitWidth * 1.25
+            && entry.depth <= this.gridUnitDepth * 1.25);
+        const authoredColumns = this.clusterGridCoordinates(unitBlocks.map((entry) => entry.block.worldPosition.x));
+        const authoredRows = this.clusterGridCoordinates(unitBlocks.map((entry) => entry.block.worldPosition.z));
+        if (authoredColumns.length >= 2 && authoredRows.length >= 2) {
+            for (let row = 0; row < authoredRows.length; row++) {
+                for (let column = 0; column < authoredColumns.length; column++) {
+                    this.gridCells.push({
+                        column,
+                        row,
+                        x: authoredColumns[column],
+                        z: authoredRows[row],
+                    });
                 }
             }
-            if (best) break;
+            return;
         }
-        if (best) block.setWorldPosition(best);
+
+        const columns = Math.max(1, Math.round(this.boardColumns));
+        const rows = Math.max(1, Math.round(this.boardRows));
+        const cellSize = Math.max(0.01, this.gridCellSize);
+        const origin = this.boardPhysical.worldPosition;
+        const columnOffset = (columns - 1) * 0.5;
+        const rowOffset = (rows - 1) * 0.5;
+        for (let row = 0; row < rows; row++) {
+            for (let column = 0; column < columns; column++) {
+                this.gridCells.push({
+                    column,
+                    row,
+                    x: origin.x + (column - columnOffset) * cellSize,
+                    z: origin.z + (row - rowOffset) * cellSize,
+                });
+            }
+        }
+    }
+
+    /** Merges scene coordinates that differ only by minor authoring noise. */
+    private clusterGridCoordinates(values: number[]) {
+        const clusters: number[][] = [];
+        for (const value of values.slice().sort((a, b) => a - b)) {
+            const cluster = clusters.find((entry) => Math.abs(entry[0] - value) < 0.25);
+            if (cluster) cluster.push(value);
+            else clusters.push([value]);
+        }
+        return clusters.map((cluster) => cluster.reduce((sum, value) => sum + value, 0) / cluster.length);
+    }
+
+    /** One-cell pieces use cell centres; multi-cell pieces retain their authored phase. */
+    private gridOffsetForBlock(block: Node) {
+        if (this.gridCells.length === 0) return Vec3.ZERO.clone();
+        const rects = this.colliderRects(block, block.worldPosition);
+        const width = Math.max(...rects.map((rect) => rect.maxX)) - Math.min(...rects.map((rect) => rect.minX));
+        const depth = Math.max(...rects.map((rect) => rect.maxZ)) - Math.min(...rects.map((rect) => rect.minZ));
+        if (width <= this.gridUnitWidth * 1.25 && depth <= this.gridUnitDepth * 1.25) return Vec3.ZERO.clone();
+        const current = block.worldPosition;
+        const nearest = this.gridCells.reduce((best, cell) => {
+            const bestDistance = (best.x - current.x) * (best.x - current.x) + (best.z - current.z) * (best.z - current.z);
+            const distance = (cell.x - current.x) * (cell.x - current.x) + (cell.z - current.z) * (cell.z - current.z);
+            return distance < bestDistance ? cell : best;
+        });
+        return new Vec3(current.x - nearest.x, 0, current.z - nearest.z);
+    }
+
+    /** Returns the closest cell on which this block can legally rest. */
+    private nearestGridPlacement(block: Node, desired: Readonly<Vec3>, requireUnoccupied: boolean): Vec3 | null {
+        const cells = this.gridCells.slice().sort((a, b) => {
+            const ax = a.x + this.dragGridOffset.x;
+            const az = a.z + this.dragGridOffset.z;
+            const bx = b.x + this.dragGridOffset.x;
+            const bz = b.z + this.dragGridOffset.z;
+            const distanceA = (ax - desired.x) * (ax - desired.x) + (az - desired.z) * (az - desired.z);
+            const distanceB = (bx - desired.x) * (bx - desired.x) + (bz - desired.z) * (bz - desired.z);
+            return distanceA - distanceB;
+        });
+        for (const cell of cells) {
+            const candidate = new Vec3(
+                cell.x + this.dragGridOffset.x,
+                desired.y,
+                cell.z + this.dragGridOffset.z,
+            );
+            if (!this.isExactBoardPlacement(block, candidate)) continue;
+            if (requireUnoccupied && !this.canPlaceWithoutOverlap(block, candidate)) continue;
+            return candidate;
+        }
+        return null;
+    }
+
+    /** Rejects grid coordinates that the authored H-shaped walls would clamp. */
+    private isExactBoardPlacement(block: Node, candidate: Readonly<Vec3>) {
+        const constrained = new Vec3(candidate.x, candidate.y, candidate.z);
+        this.keepInsideBoardColliders(block, constrained);
+        // A small allowance preserves edge rows that were visually authored a
+        // few hundredths beyond the older imported wall colliders.
+        const tolerance = Math.max(0.01, this.gridCellSize * 0.1);
+        return Math.abs(constrained.x - candidate.x) < tolerance
+            && Math.abs(constrained.z - candidate.z) < tolerance;
     }
 
     private readBoardShape(): BoardShape | null {

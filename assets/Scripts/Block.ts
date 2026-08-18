@@ -15,10 +15,12 @@ export class Block extends Component {
     private consuming = false;
     private dragTarget: Vec3 | null = null;
     private dragBaseY = 0;
-    private readonly dragLift = 0.28;
+    private readonly dragLift = 0;
     private footprintTiles: Node[] = [];
     private footprintMaterial: Material | null = null;
     private footprintPulse = { alpha: 0 };
+    private placementMotion = { t: 0 };
+    private footprintAnchor: Vec3 | null = null;
 
     onLoad() {
         this.body = this.getComponent(RigidBody);
@@ -41,6 +43,7 @@ export class Block extends Component {
         this.dragging = true;
         this.dragBaseY = this.node.worldPosition.y;
         this.dragTarget = this.node.worldPosition.clone();
+        this.footprintAnchor = this.dragTarget.clone();
         this.showFootprint(true);
         this.homeScale.set(this.node.scale);
         this.stopBody();
@@ -68,6 +71,12 @@ export class Block extends Component {
         this.updateFootprintTiles();
     }
 
+    /** Moves the board glow to the cell that will receive this block. */
+    previewPlacementAt(position: Readonly<Vec3> | null) {
+        this.footprintAnchor = position ? new Vec3(position.x, this.dragBaseY, position.z) : null;
+        this.updateFootprintTiles();
+    }
+
     /** Snaps to the latest legal drag target before a release is evaluated. */
     settleDrag() {
         if (!this.dragTarget || this.consuming) return;
@@ -79,10 +88,51 @@ export class Block extends Component {
         if (!this.dragging || this.consuming) return;
         this.dragging = false;
         this.dragTarget = null;
+        this.footprintAnchor = null;
         this.showFootprint(false);
         GameFeelAudio.stopDrag(this.node.uuid);
         Tween.stopAllByTarget(this.node);
         tween(this.node).to(0.10, { scale: this.homeScale.clone() }, { easing: 'quadOut' }).start();
+    }
+
+    /** Finishes a drag with a short, readable snap into a logical board cell. */
+    endDragAt(position: Readonly<Vec3>) {
+        if (!this.dragging || this.consuming) return;
+        this.dragging = false;
+        this.dragTarget = null;
+        this.footprintAnchor = null;
+        this.showFootprint(false);
+        GameFeelAudio.stopDrag(this.node.uuid);
+        Tween.stopAllByTarget(this.node);
+        Tween.stopAllByTarget(this.placementMotion);
+
+        const start = this.node.worldPosition.clone();
+        const destination = new Vec3(position.x, this.dragBaseY, position.z);
+        const startScale = this.node.scale.clone();
+        this.placementMotion.t = 0;
+        tween(this.placementMotion)
+            .to(0.10, { t: 1 }, {
+                easing: 'quadOut',
+                onUpdate: () => {
+                    const t = this.placementMotion.t;
+                    this.node.setWorldPosition(new Vec3(
+                        start.x + (destination.x - start.x) * t,
+                        start.y + (destination.y - start.y) * t,
+                        start.z + (destination.z - start.z) * t,
+                    ));
+                    this.node.setScale(new Vec3(
+                        startScale.x + (this.homeScale.x - startScale.x) * t,
+                        startScale.y + (this.homeScale.y - startScale.y) * t,
+                        startScale.z + (this.homeScale.z - startScale.z) * t,
+                    ));
+                },
+            })
+            .call(() => {
+                if (!this.node.isValid) return;
+                this.node.setWorldPosition(destination);
+                this.node.setScale(this.homeScale);
+            })
+            .start();
     }
 
     /**
@@ -100,6 +150,7 @@ export class Block extends Component {
         this.consuming = true;
         this.dragging = false;
         this.dragTarget = null;
+        this.footprintAnchor = null;
         this.showFootprint(false);
         GameFeelAudio.stopDrag(this.node.uuid);
         this.stopBody();
@@ -163,6 +214,7 @@ export class Block extends Component {
         this.consuming = true;
         this.dragging = false;
         this.dragTarget = null;
+        this.footprintAnchor = null;
         this.showFootprint(false);
         GameFeelAudio.stopDrag(this.node.uuid);
         this.stopBody();
@@ -183,6 +235,7 @@ export class Block extends Component {
 
     onDestroy() {
         GameFeelAudio.stopDrag(this.node.uuid);
+        Tween.stopAllByTarget(this.placementMotion);
         Tween.stopAllByTarget(this.footprintPulse);
         this.footprintMaterial?.destroy();
         this.footprintMaterial = null;
@@ -266,7 +319,7 @@ export class Block extends Component {
         const rows = Math.max(1, Math.round(depth));
         const stepX = width / columns;
         const stepZ = depth / rows;
-        const origin = this.node.worldPosition;
+        const origin = this.footprintAnchor || this.node.worldPosition;
         let index = 0;
         for (let row = 0; row < rows; row++) {
             for (let column = 0; column < columns; column++) {
