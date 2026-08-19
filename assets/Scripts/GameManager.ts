@@ -1,6 +1,6 @@
 import {
-    _decorator, Animation, BoxCollider, Camera, Color, Component, EventTouch, find, geometry, Input, input,
-    Material, MeshRenderer, Node, PhysicsSystem, RigidBody, Tween, tween, Vec3,
+    _decorator, Animation, AudioClip, AudioSource, BoxCollider, Camera, Color, Component, EventTouch, find,
+    geometry, Input, input, Material, MeshRenderer, Node, PhysicsSystem, RigidBody, Tween, tween, Vec3,
 } from 'cc';
 import { Block } from './Block';
 import { Shredder } from './Shredder';
@@ -39,6 +39,18 @@ export class GameManager extends Component {
 
     @property({ type: Node, tooltip: 'Call-to-action node shown when game time expires.' })
     cta: Node | null = null;
+
+    @property({ type: AudioClip, tooltip: 'Looping background music. Playback begins on the first player touch.' })
+    bgmClip: AudioClip | null = null;
+
+    @property({ tooltip: 'Background music volume.' })
+    bgmVolume = 0.28;
+
+    @property({ type: AudioClip, tooltip: 'Short sound played when the player picks up a block.' })
+    dragClip: AudioClip | null = null;
+
+    @property({ tooltip: 'Block pickup sound volume.' })
+    dragVolume = 0.65;
 
     @property({ tooltip: 'Fallback column count when a scene has no authored one-cell blocks.' })
     boardColumns = 7;
@@ -79,10 +91,15 @@ export class GameManager extends Component {
     private readonly gameTimeDuration = 35; // seconds
     private gameTimeActive = false;
     private gameTimeStarted = false;
+    private audioRoot: Node | null = null;
+    private bgmSource: AudioSource | null = null;
+    private dragSource: AudioSource | null = null;
+    private bgmStarted = false;
 
     start() {
         this.camera = this.camera || find('Main Camera')?.getComponent(Camera) || null;
         this.refreshSceneReferences();
+        this.prepareAudio();
         input.on(Input.EventType.TOUCH_START, this.onTouchStart, this);
         input.on(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
         input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
@@ -113,6 +130,40 @@ export class GameManager extends Component {
         input.off(Input.EventType.TOUCH_CANCEL, this.onTouchCancel, this);
         this.stopTutorialHand();
         this.gameTimeActive = false;
+        this.bgmSource?.stop();
+        this.dragSource?.stop();
+        this.bgmStarted = false;
+    }
+
+    /** Creates dedicated sources without requiring scene AudioSource setup. */
+    private prepareAudio() {
+        if (this.audioRoot || (!this.bgmClip && !this.dragClip)) return;
+
+        this.audioRoot = new Node('GameAudio');
+        this.node.addChild(this.audioRoot);
+
+        if (this.bgmClip) {
+            const bgmNode = new Node('BGM');
+            this.audioRoot.addChild(bgmNode);
+            this.bgmSource = bgmNode.addComponent(AudioSource);
+            this.bgmSource.clip = this.bgmClip;
+            this.bgmSource.loop = true;
+            this.bgmSource.volume = Math.max(0, Math.min(1, this.bgmVolume));
+        }
+
+        if (this.dragClip) {
+            const dragNode = new Node('DragSFX');
+            this.audioRoot.addChild(dragNode);
+            this.dragSource = dragNode.addComponent(AudioSource);
+            this.dragSource.volume = Math.max(0, Math.min(1, this.dragVolume));
+        }
+    }
+
+    /** Must be called synchronously from input so mobile browser autoplay policies are satisfied. */
+    private startBgmFromInteraction() {
+        if (this.bgmStarted || !this.bgmSource || !this.bgmClip) return;
+        this.bgmStarted = true;
+        this.bgmSource.play();
     }
 
     private startTutorialHand() {
@@ -219,6 +270,7 @@ export class GameManager extends Component {
     }
 
     private onTouchStart(event: EventTouch) {
+        this.startBgmFromInteraction();
         // Start game timer on first player interaction.
         if (!this.gameTimeStarted) {
             this.gameTimeStarted = true;
@@ -230,6 +282,7 @@ export class GameManager extends Component {
         const block = this.pickBlock(event);
         const behaviour = block?.getComponent(Block) || null;
         if (!block || !behaviour || !behaviour.beginDrag()) return;
+        if (this.dragSource && this.dragClip) this.dragSource.playOneShot(this.dragClip);
         this.grabbed = block;
         // Player has begun interacting; hide the tutorial hand.
         this.stopTutorialHand();

@@ -69,6 +69,11 @@ export class CTAButtonHandler extends Component {
         if (mainAudio) {
             mainAudio.stop();
         }
+        // GameManager creates dedicated BGM/SFX sources at runtime.
+        const gameAudio = find("GameManager/GameAudio");
+        for (const source of gameAudio?.getComponentsInChildren(AudioSource) || []) {
+            source.stop();
+        }
 
         const adWindow = globalThis as any;
         const exitApi = adWindow.ExitApi;
