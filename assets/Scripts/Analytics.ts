@@ -1,7 +1,5 @@
-import { _decorator, Component } from "cc";
+import { _decorator, Component } from 'cc';
 const { ccclass } = _decorator;
-
-declare const window: any;
 
 export enum analyticsEvents {
     // Loading and display events
@@ -25,41 +23,45 @@ export enum analyticsEvents {
 
 @ccclass("Analytics")
 export class Analytics extends Component {
-    static _instance: Analytics;
+    private static _instance: Analytics | null = null;
     static get instance() {
         return this._instance;
     }
 
-    // Debug counter for testing
     private static eventCounts: Map<string, number> = new Map();
-    private static hasInitialized: boolean = false;
+    private static sentEvents: Set<string> = new Set();
 
     onLoad() {
         Analytics._instance = this;
-        
-        // Fire LOADING event once on initialization
-        if (!Analytics.hasInitialized) {
-            Analytics.hasInitialized = true;
-            this.dispatchEvent(analyticsEvents.LOADING);
-        }
+    }
+
+    onDestroy() {
+        if (Analytics._instance === this) Analytics._instance = null;
     }
 
     /**
-     * Sends the event to AppLovin if the SDK is present, otherwise dispatches to the browser.
+     * Sends one of AppLovin's predefined events. This static entry point works
+     * even when no Analytics component has been authored into the scene.
      */
-    public dispatchEvent(eventName: analyticsEvents | string) {
-        // Track event count for debugging
+    static trackEvent(eventName: analyticsEvents) {
+        // AppLovin dedupes these events, and mirroring that behavior locally
+        // protects against repeated component callbacks or CTA clicks.
+        if (this.sentEvents.has(eventName)) return;
+        this.sentEvents.add(eventName);
+
         const currentCount = (Analytics.eventCounts.get(eventName) || 0) + 1;
         Analytics.eventCounts.set(eventName, currentCount);
-        console.log(`[Analytics] Event "${eventName}" sent (Total: ${currentCount})`);
+        console.log(`[Analytics] ${eventName} (${currentCount})`);
 
-        if (window.ALPlayableAnalytics && typeof window.ALPlayableAnalytics.trackEvent === "function") {
-            window.ALPlayableAnalytics.trackEvent(eventName);
-            console.log(`[AL Analytics] Sent: ${eventName}`);
-        } else {
-            // Local fallback for testing in browser console
-            window.dispatchEvent(new Event(eventName));
-            console.warn(`[Analytics Fallback] SDK Not Found. Dispatched Browser Event: ${eventName}`);
+        const scope = globalThis as any;
+        if (typeof scope.ALPlayableAnalytics !== 'undefined'
+            && typeof scope.ALPlayableAnalytics.trackEvent === 'function') {
+            scope.ALPlayableAnalytics.trackEvent(eventName);
         }
+    }
+
+    /** Compatibility for any scene/button code that still uses the component instance. */
+    public dispatchEvent(eventName: analyticsEvents) {
+        Analytics.trackEvent(eventName);
     }
 }

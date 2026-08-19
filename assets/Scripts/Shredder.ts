@@ -131,8 +131,11 @@ export class Shredder extends Component {
         const material = new Material();
         // builtin-unlit technique 2 is additive transparent and portable to the
         // WebGL runtime used by playable-ad preview environments.
-        material.initialize({ effectName: 'builtin-unlit', technique: 2 });
-        material.recompileShaders({ USE_VERTEX_COLOR: true });
+        material.initialize({
+            effectName: 'builtin-unlit',
+            technique: 2,
+            defines: { USE_VERTEX_COLOR: true },
+        });
         renderer.setMaterial(material, 0);
 
         glow.active = false;

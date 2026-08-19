@@ -1,9 +1,10 @@
 import {
     _decorator, Animation, AudioClip, AudioSource, BoxCollider, Camera, Color, Component, EventTouch, find,
-    geometry, Input, input, Material, MeshRenderer, Node, PhysicsSystem, RigidBody, Tween, tween, Vec3,
+    geometry, Input, input, instantiate, Material, MeshRenderer, Node, PhysicsSystem, RigidBody, Tween, tween, Vec3,
 } from 'cc';
 import { Block } from './Block';
 import { Shredder } from './Shredder';
+import { Analytics, analyticsEvents } from './Analytics';
 
 const { ccclass, property } = _decorator;
 
@@ -85,16 +86,35 @@ export class GameManager extends Component {
     // Tutorial hand state
     private tutorialHandActive = false;
     private tutorialHandPulseFn: (() => void) | null = null;
+    private yellowTutorialActive = false;
+    private yellowTutorialBlock: Node | null = null;
+    private yellowTutorialShredder: Node | null = null;
+    private yellowTutorialGhost: Node | null = null;
+    private yellowTutorialHandHome: Vec3 | null = null;
+    private yellowTutorialMaterials: Material[] = [];
+    private readonly yellowTutorialMotion = { t: 0 };
 
     // Game timer state
     private gameTimeElapsed = 0;
     private readonly gameTimeDuration = 35; // seconds
     private gameTimeActive = false;
     private gameTimeStarted = false;
+    private challengeStarted = false;
+    private challengeFailed = false;
+    private challengeSolved = false;
+    private challengeObstacleCount = 0;
+    private challengeObstaclesCleared = 0;
+    private challengeProgressStep = 0;
     private audioRoot: Node | null = null;
     private bgmSource: AudioSource | null = null;
     private dragSource: AudioSource | null = null;
     private bgmStarted = false;
+
+    onLoad() {
+        // AppLovin loading begins while Cocos initializes the scene components
+        // and prepares the playable before input is enabled in start().
+        Analytics.trackEvent(analyticsEvents.LOADING);
+    }
 
     start() {
         this.camera = this.camera || find('Main Camera')?.getComponent(Camera) || null;
@@ -104,14 +124,28 @@ export class GameManager extends Component {
         input.on(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
         input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.on(Input.EventType.TOUCH_CANCEL, this.onTouchCancel, this);
-        // Start tutorial hand demo (idle/click pulse) until the player begins interaction.
-        if (this.hand) this.startTutorialHand();
+        // Loop a translucent copy of the yellow piece toward its shredder. The
+        // authored gameplay block stays fixed and fully interactive underneath.
+        if (this.hand) this.startYellowShredderTutorial();
         // Initialize game timer state (timer will start on first player interaction).
         this.gameTimeElapsed = 0;
         this.gameTimeActive = false;
         this.gameTimeStarted = false;
+        this.challengeStarted = false;
+        this.challengeFailed = false;
+        this.challengeSolved = false;
+        this.challengeObstacleCount = this.elements.reduce((total, element) => {
+            if (this.isChallengeGoalElement(element)) return total;
+            return total + element.blockNodes.filter((block) => !!block && block.isValid).length;
+        }, 0);
+        this.challengeObstaclesCleared = 0;
+        this.challengeProgressStep = 0;
         // Ensure CTA is inactive at start.
         if (this.cta && this.cta.isValid) this.cta.active = false;
+        // LOADED is required whenever LOADING is emitted. DISPLAYED follows
+        // only after the complete scene is ready for player interaction.
+        Analytics.trackEvent(analyticsEvents.LOADED);
+        Analytics.trackEvent(analyticsEvents.DISPLAYED);
     }
 
     update(deltaTime: number) {
@@ -119,6 +153,8 @@ export class GameManager extends Component {
         this.gameTimeElapsed += deltaTime;
         if (this.gameTimeElapsed >= this.gameTimeDuration) {
             this.gameTimeActive = false;
+            // This is an ad-duration endcard, not a gameplay failure. Do not
+            // emit CHALLENGE_FAILED for a player who simply reached ad time.
             this.showCTA();
         }
     }
@@ -128,6 +164,7 @@ export class GameManager extends Component {
         input.off(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
         input.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.off(Input.EventType.TOUCH_CANCEL, this.onTouchCancel, this);
+        this.finishYellowShredderTutorial(false);
         this.stopTutorialHand();
         this.gameTimeActive = false;
         this.bgmSource?.stop();
@@ -204,6 +241,142 @@ export class GameManager extends Component {
         this.schedule(this.tutorialHandPulseFn, 1.6);
     }
 
+    /** Loops a translucent visual copy from the Yellow block to its authored shredder. */
+    private startYellowShredderTutorial() {
+        if (!this.hand || !this.hand.isValid) return;
+        const yellow = this.elements.find((element) => element.elementId.trim().toLowerCase() === 'yellow');
+        const block = yellow?.blockNodes.find((entry) => entry?.isValid) || null;
+        const shredder = yellow?.targetShredders.find((entry) => entry?.isValid) || null;
+        if (!block || !shredder) {
+            this.startTutorialHand();
+            return;
+        }
+
+        this.yellowTutorialActive = true;
+        this.yellowTutorialBlock = block;
+        this.yellowTutorialShredder = shredder;
+        this.yellowTutorialHandHome = this.hand.worldPosition.clone();
+
+        const ghost = instantiate(block);
+        ghost.name = 'YellowTutorialGhost';
+        const ghostBehaviour = ghost.getComponent(Block);
+        if (ghostBehaviour) ghostBehaviour.enabled = false;
+        for (const collider of ghost.getComponentsInChildren(BoxCollider)) collider.enabled = false;
+        for (const body of ghost.getComponentsInChildren(RigidBody)) body.enabled = false;
+        (block.parent || this.node).addChild(ghost);
+        ghost.setWorldPosition(block.worldPosition);
+        this.yellowTutorialGhost = ghost;
+        this.makeYellowTutorialGhostTranslucent(
+            ghost,
+            this.blockMainColour(block) || new Color(255, 216, 12, 255),
+        );
+
+        const blockStart = block.worldPosition.clone();
+        const blockEnd = this.yellowTutorialDropPoint(block, shredder);
+        const handYOffset = this.yellowTutorialHandHome.y - blockStart.y;
+        const handStart = new Vec3(blockStart.x, blockStart.y + handYOffset, blockStart.z);
+        const handEnd = new Vec3(blockEnd.x, blockEnd.y + handYOffset, blockEnd.z);
+        this.hand.setWorldPosition(handStart);
+        this.showHandIdle();
+
+        const applyMotion = (fromBlock: Readonly<Vec3>, toBlock: Readonly<Vec3>,
+            fromHand: Readonly<Vec3>, toHand: Readonly<Vec3>) => {
+            if (!this.yellowTutorialActive || !ghost.isValid || !this.hand?.isValid) return;
+            const t = this.yellowTutorialMotion.t;
+            ghost.setWorldPosition(new Vec3(
+                fromBlock.x + (toBlock.x - fromBlock.x) * t,
+                fromBlock.y + (toBlock.y - fromBlock.y) * t,
+                fromBlock.z + (toBlock.z - fromBlock.z) * t,
+            ));
+            this.hand.setWorldPosition(new Vec3(
+                fromHand.x + (toHand.x - fromHand.x) * t,
+                fromHand.y + (toHand.y - fromHand.y) * t,
+                fromHand.z + (toHand.z - fromHand.z) * t,
+            ));
+        };
+
+        Tween.stopAllByTarget(this.yellowTutorialMotion);
+        this.yellowTutorialMotion.t = 0;
+        tween(this.yellowTutorialMotion)
+            .delay(0.35)
+            .call(() => this.showHandClick())
+            .to(1.25, { t: 1 }, {
+                easing: 'sineInOut',
+                onUpdate: () => applyMotion(blockStart, blockEnd, handStart, handEnd),
+            })
+            .call(() => shredder.getComponent(Shredder)?.setAnticipation(true, this.blockMainColour(block)))
+            .delay(0.42)
+            .call(() => {
+                shredder.getComponent(Shredder)?.setAnticipation(false, null);
+                this.yellowTutorialMotion.t = 0;
+            })
+            .to(0.48, { t: 1 }, {
+                easing: 'sineInOut',
+                onUpdate: () => applyMotion(blockEnd, blockStart, handEnd, handStart),
+            })
+            .call(() => {
+                this.yellowTutorialMotion.t = 0;
+                if (ghost.isValid) ghost.setWorldPosition(blockStart);
+                if (this.hand?.isValid) {
+                    this.hand.setWorldPosition(handStart);
+                    this.showHandIdle();
+                }
+            })
+            .union()
+            .repeatForever()
+            .start();
+    }
+
+    /** Gives the moving tutorial copy its own transparent materials. */
+    private makeYellowTutorialGhostTranslucent(ghost: Node, sourceColour: Color) {
+        this.yellowTutorialMaterials = [];
+        for (const renderer of ghost.getComponentsInChildren(MeshRenderer)) {
+            for (let index = 0; index < renderer.sharedMaterials.length; index++) {
+                const material = new Material();
+                material.initialize({ effectName: 'builtin-standard', technique: 1 });
+                material.setProperty('mainColor', new Color(sourceColour.r, sourceColour.g, sourceColour.b, 92));
+                material.setProperty('roughness', 0.7);
+                material.setProperty('metallic', 0.35);
+                material.setProperty('specularIntensity', 0.45);
+                renderer.setMaterial(material, index);
+                this.yellowTutorialMaterials.push(material);
+            }
+        }
+    }
+
+    /** Uses the centre of the shredder's authored drop trigger as the tutorial destination. */
+    private yellowTutorialDropPoint(block: Node, shredder: Node) {
+        const collider = shredder.getComponent(Shredder)?.dropColliders()[0] || null;
+        if (!collider) return new Vec3(shredder.worldPosition.x, block.worldPosition.y, shredder.worldPosition.z);
+        const bounds = this.worldBounds(collider);
+        return new Vec3(
+            (bounds.minX + bounds.maxX) * 0.5,
+            block.worldPosition.y,
+            (bounds.minZ + bounds.maxZ) * 0.5,
+        );
+    }
+
+    /** Removes the yellow route and optionally resumes the authored hand tutorial. */
+    private finishYellowShredderTutorial(startNormalTutorial: boolean) {
+        if (!this.yellowTutorialActive) return;
+        this.yellowTutorialActive = false;
+        Tween.stopAllByTarget(this.yellowTutorialMotion);
+        this.yellowTutorialShredder?.getComponent(Shredder)?.setAnticipation(false, null);
+        if (this.yellowTutorialGhost?.isValid) this.yellowTutorialGhost.destroy();
+        for (const material of this.yellowTutorialMaterials) material.destroy();
+        if (this.hand?.isValid && this.yellowTutorialHandHome) {
+            this.hand.setWorldPosition(this.yellowTutorialHandHome);
+        }
+        this.yellowTutorialBlock = null;
+        this.yellowTutorialShredder = null;
+        this.yellowTutorialGhost = null;
+        this.yellowTutorialHandHome = null;
+        this.yellowTutorialMaterials = [];
+        this.yellowTutorialMotion.t = 0;
+        if (startNormalTutorial) this.startTutorialHand();
+        else this.hideHand();
+    }
+
     private stopTutorialHand() {
         this.tutorialHandActive = false;
         if (this.tutorialHandPulseFn) {
@@ -242,7 +415,6 @@ export class GameManager extends Component {
         // neck, so it must run while every piece is still in its scene position.
         this.boardShape = this.readBoardShape();
         this.rebuildBoardGrid();
-        if (!this.boardPhysical || this.blocks.length === 0) console.warn('[GameManager] Add BoardPhysical and Element block references.');
     }
 
     /**
@@ -271,21 +443,27 @@ export class GameManager extends Component {
 
     private onTouchStart(event: EventTouch) {
         this.startBgmFromInteraction();
-        // Start game timer on first player interaction.
+        // The first real touch removes the yellow route, restores the hand to
+        // its authored scene position, and starts the original repeating cue.
+        const keepTutorialHand = this.yellowTutorialActive;
+        if (this.yellowTutorialActive) this.finishYellowShredderTutorial(true);
+        if (this.challengeSolved || this.challengeFailed || this.isCrushing || this.grabbed) return;
+        const block = this.pickBlock(event);
+        const behaviour = block?.getComponent(Block) || null;
+        if (!block || !behaviour || !behaviour.beginDrag()) return;
+        if (!this.challengeStarted) {
+            this.challengeStarted = true;
+            Analytics.trackEvent(analyticsEvents.CHALLENGE_STARTED);
+        }
         if (!this.gameTimeStarted) {
             this.gameTimeStarted = true;
             this.gameTimeActive = true;
             this.gameTimeElapsed = 0;
         }
-        
-        if (this.isCrushing || this.grabbed) return;
-        const block = this.pickBlock(event);
-        const behaviour = block?.getComponent(Block) || null;
-        if (!block || !behaviour || !behaviour.beginDrag()) return;
         if (this.dragSource && this.dragClip) this.dragSource.playOneShot(this.dragClip);
         this.grabbed = block;
-        // Player has begun interacting; hide the tutorial hand.
-        this.stopTutorialHand();
+        // Preserve the hand on the tap that dismisses the looping guide.
+        if (!keepTutorialHand) this.stopTutorialHand();
         this.lastLegalDragPosition = block.worldPosition.clone();
         this.dragStartGridPosition = block.worldPosition.clone();
         this.dragGridOffset.set(this.gridOffsetForBlock(block));
@@ -371,6 +549,7 @@ export class GameManager extends Component {
         }
         const direction = this.shredderExitNormal(block, shredderNode);
         const exit = this.shredderExitWorld(block, shredderNode, direction);
+        const isChallengeGoal = this.isChallengeGoalBlock(block);
 
         // The block stays intact while it travels outward. The exit calculation
         // retains its lateral coordinate, eliminating the old centre/left snap.
@@ -386,6 +565,7 @@ export class GameManager extends Component {
             this.scheduleOnce(() => {
                 if (block.isValid) {
                     this.blocks = this.blocks.filter((entry) => entry !== block);
+                    this.recordGameplayProgress(isChallengeGoal);
                     block.destroy();
                 }
                 this.isCrushing = false;
@@ -461,7 +641,6 @@ export class GameManager extends Component {
             }
 
             if (!child) {
-                console.warn('[GameManager] hand child not found and no fallback available:', childName);
                 return;
             }
         }
@@ -512,8 +691,65 @@ export class GameManager extends Component {
     private showCTA() {
         if (!this.cta || !this.cta.isValid) return;
         this.cta.active = true;
+        Analytics.trackEvent(analyticsEvents.ENDCARD_SHOWN);
         // Stop player input when CTA is shown.
         this.gameTimeActive = false;
+    }
+
+    /** Yellow entering its shredder completes the challenge; other successful
+     * shreds advance progress according to the visible board pieces cleared. */
+    private recordGameplayProgress(isChallengeGoal: boolean) {
+        if (!this.challengeStarted || this.challengeFailed || this.challengeSolved) return;
+        if (isChallengeGoal) {
+            this.challengeSolved = true;
+            this.gameTimeActive = false;
+            Analytics.trackEvent(analyticsEvents.CHALLENGE_SOLVED);
+            this.showCTA();
+            return;
+        }
+
+        this.challengeObstaclesCleared++;
+        if (this.challengeObstacleCount <= 0) return;
+        const progress = this.challengeObstaclesCleared / this.challengeObstacleCount;
+        const events = [
+            analyticsEvents.CHALLENGE_PASS_25,
+            analyticsEvents.CHALLENGE_PASS_50,
+            analyticsEvents.CHALLENGE_PASS_75,
+        ];
+        const thresholds = [0.25, 0.50, 0.75];
+        while (this.challengeProgressStep < thresholds.length
+            && progress >= thresholds[this.challengeProgressStep]) {
+            Analytics.trackEvent(events[this.challengeProgressStep]);
+            this.challengeProgressStep++;
+        }
+    }
+
+    /** Call only when gameplay enters a real authored failure state. */
+    public failChallenge() {
+        if (!this.challengeStarted || this.challengeFailed || this.challengeSolved) return;
+        this.challengeFailed = true;
+        this.gameTimeActive = false;
+        Analytics.trackEvent(analyticsEvents.CHALLENGE_FAILED);
+    }
+
+    /** Call from the player's retry action after a real challenge failure. */
+    public retryChallenge() {
+        if (!this.challengeStarted || !this.challengeFailed || this.challengeSolved) return;
+        this.challengeFailed = false;
+        this.gameTimeElapsed = 0;
+        this.gameTimeActive = true;
+        if (this.cta?.isValid) this.cta.active = false;
+        Analytics.trackEvent(analyticsEvents.CHALLENGE_RETRY);
+    }
+
+    private isChallengeGoalElement(element: GameElement) {
+        return element.elementId.trim().toLowerCase() === 'yellow';
+    }
+
+    private isChallengeGoalBlock(block: Node) {
+        return this.elements.some((element) =>
+            this.isChallengeGoalElement(element) && element.blockNodes.indexOf(block) !== -1,
+        );
     }
 
     public getRemainingGameTime(): number {
@@ -881,12 +1117,23 @@ export class GameManager extends Component {
         const rightWalls = verticalWalls.filter((wall) => (wall.minX + wall.maxX) * 0.5 > origin.x);
         if (leftWalls.length === 0 || rightWalls.length === 0 || horizontalWalls.length < 2) return null;
 
+        // BoardPhysical may also contain vertical walls inside the H-shaped
+        // neck. Only the extreme wall segments define the outer drag bounds;
+        // treating every left/right collider as an outside wall makes an inner
+        // wall collapse the legal board width and causes sticky drag clamping.
+        const wallCenterX = (wall: Bounds3D) => (wall.minX + wall.maxX) * 0.5;
+        const farLeftCenter = Math.min(...leftWalls.map(wallCenterX));
+        const farRightCenter = Math.max(...rightWalls.map(wallCenterX));
+        const outerWallTolerance = 0.25;
+        const outerLeftWalls = leftWalls.filter((wall) => Math.abs(wallCenterX(wall) - farLeftCenter) <= outerWallTolerance);
+        const outerRightWalls = rightWalls.filter((wall) => Math.abs(wallCenterX(wall) - farRightCenter) <= outerWallTolerance);
+
         horizontalWalls.sort((a, b) => (a.minZ + a.maxZ) - (b.minZ + b.maxZ));
         const bottomWall = horizontalWalls[0];
         const topWall = horizontalWalls[horizontalWalls.length - 1];
         const outer: Rect = {
-            minX: Math.max(...leftWalls.map((wall) => wall.maxX)),
-            maxX: Math.min(...rightWalls.map((wall) => wall.minX)),
+            minX: Math.max(...outerLeftWalls.map((wall) => wall.maxX)),
+            maxX: Math.min(...outerRightWalls.map((wall) => wall.minX)),
             minZ: bottomWall.maxZ,
             maxZ: topWall.minZ,
         };

@@ -284,8 +284,11 @@ export class Block extends Component {
         const columns = Math.max(1, Math.round(width));
         const rows = Math.max(1, Math.round(depth));
         const material = new Material();
-        material.initialize({ effectName: 'builtin-unlit', technique: 2 });
-        material.recompileShaders({ USE_VERTEX_COLOR: true });
+        material.initialize({
+            effectName: 'builtin-unlit',
+            technique: 2,
+            defines: { USE_VERTEX_COLOR: true },
+        });
         this.footprintMaterial = material;
         const parent = this.node.parent || this.node;
         for (let row = 0; row < rows; row++) {

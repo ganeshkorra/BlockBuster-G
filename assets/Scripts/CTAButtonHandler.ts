@@ -57,10 +57,7 @@ export class CTAButtonHandler extends Component {
     public onStoreButtonClicked(): void {
         const targetUrl = this.getTargetStoreUrl();
 
-        // Fire CTA_CLICKED event
-        if (Analytics.instance) {
-            Analytics.instance.dispatchEvent(analyticsEvents.CTA_CLICKED);
-        }
+        Analytics.trackEvent(analyticsEvents.CTA_CLICKED);
 
         // 1. Stop audio before redirecting (Technical requirement)
         const mainAudio =
