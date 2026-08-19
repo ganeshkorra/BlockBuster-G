@@ -74,6 +74,8 @@ export class Block extends Component {
     /** Moves the board glow to the cell that will receive this block. */
     previewPlacementAt(position: Readonly<Vec3> | null) {
         this.footprintAnchor = position ? new Vec3(position.x, this.dragBaseY, position.z) : null;
+        for (const tile of this.footprintTiles) tile.active = !!position;
+        if (!position) return;
         this.updateFootprintTiles();
     }
 
@@ -136,15 +138,15 @@ export class Block extends Component {
     }
 
     /**
-     * Sends the intact piece through the gate in one authored direction.
-     * The caller supplies an exit with the lateral coordinate preserved, so this
-     * never makes the piece jump sideways to the centre of a shredder.
+     * Aligns the intact piece with the mouth, then sends it through the gate in
+     * one authored direction without an instantaneous release-time position change.
      */
     consumeThrough(
         exitWorld: Readonly<Vec3>,
         duration: number,
         onTwentyPercentEntry: () => void,
         onComplete: () => void,
+        entryWorld?: Readonly<Vec3>,
     ) {
         if (this.consuming) return;
         this.consuming = true;
@@ -158,7 +160,10 @@ export class Block extends Component {
         // scale. The intact block therefore enters with no release-time pop.
         Tween.stopAllByTarget(this.node);
 
-        const start = this.node.worldPosition.clone();
+        const released = this.node.worldPosition.clone();
+        const start = entryWorld
+            ? new Vec3(entryWorld.x, released.y, entryWorld.z)
+            : released.clone();
         const end = new Vec3(exitWorld.x, exitWorld.y, exitWorld.z);
         const alongX = Math.abs(end.x - start.x) > Math.abs(end.z - start.z);
         const crushStartScale = this.node.scale.clone();
@@ -166,11 +171,28 @@ export class Block extends Component {
         const motion = { t: 0 };
         let entryFeedbackPlayed = false;
         tween(motion)
+            // Finish the small cross-mouth alignment visibly before intake.
+            // A partially aligned release therefore glides into place instead
+            // of disappearing from one board cell and reappearing at the gate.
+            .to(0.10, { t: 1 }, {
+                easing: 'quadOut',
+                onUpdate: () => {
+                    this.node.setWorldPosition(new Vec3(
+                        released.x + (start.x - released.x) * motion.t,
+                        released.y,
+                        released.z + (start.z - released.z) * motion.t,
+                    ));
+                },
+            })
+            .call(() => {
+                this.node.setWorldPosition(start);
+                motion.t = 0;
+            })
             .to(duration, { t: 1 }, {
                 easing: 'sineIn',
                 onUpdate: () => {
                     // Change only the outward axis. Lateral position and height
-                    // remain exactly as released throughout the entire intake.
+                    // remain at the visibly aligned entry throughout intake.
                     const position = start.clone();
                     if (alongX) position.x = start.x + (end.x - start.x) * motion.t;
                     else position.z = start.z + (end.z - start.z) * motion.t;

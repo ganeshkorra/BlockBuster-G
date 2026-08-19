@@ -484,8 +484,14 @@ export class GameManager extends Component {
         const behaviour = block.getComponent(Block);
         behaviour?.moveTo(resolved);
         // The block follows the finger freely, while its glow shows the exact
-        // cell that will receive it on release.
-        behaviour?.previewPlacementAt(this.nearestGridPlacement(block, resolved, true));
+        // nearby cell that will receive it on release. Never preview a distant
+        // empty cell when the current position is rejected by a wall collider.
+        behaviour?.previewPlacementAt(this.nearestGridPlacement(
+            block,
+            resolved,
+            true,
+            this.localGridSnapRadius(),
+        ));
         this.updateGateAnticipation(block);
     }
 
@@ -517,10 +523,12 @@ export class GameManager extends Component {
             // Place only on a legal, unoccupied cell. When every nearby cell is
             // occupied, the original cell remains a guaranteed, predictable
             // fallback instead of leaving the block between rows or columns.
-            const placement = this.nearestGridPlacement(block, released, true)
-                || (this.dragStartGridPosition
-                    ? this.nearestGridPlacement(block, this.dragStartGridPosition, true)
-                    : null)
+            const placement = this.nearestGridPlacement(
+                block,
+                released,
+                true,
+                this.localGridSnapRadius(),
+            )
                 || this.dragStartGridPosition
                 || released;
             this.dragStartGridPosition = null;
@@ -548,11 +556,16 @@ export class GameManager extends Component {
             shredder.setAnticipation(true, this.blockMainColour(block));
         }
         const direction = this.shredderExitNormal(block, shredderNode);
+        const entry = this.shredderEntryWorld(block, shredderNode, direction);
         const exit = this.shredderExitWorld(block, shredderNode, direction);
+        // Intake follows the aligned mouth coordinate instead of retaining an
+        // offset release coordinate that can make a block appear to jump.
+        if (Math.abs(direction.z) > 0) exit.x = entry.x;
+        else exit.z = entry.z;
         const isChallengeGoal = this.isChallengeGoalBlock(block);
 
-        // The block stays intact while it travels outward. The exit calculation
-        // retains its lateral coordinate, eliminating the old centre/left snap.
+        // The block stays intact while it aligns and travels outward; crush
+        // feedback begins only after it has visibly entered the mouth.
         blockBehaviour.consumeThrough(exit, 0.50, () => {
             // Begin the authored crush feedback after 20% of the block has
             // entered the shredder, while the remaining intake continues.
@@ -570,7 +583,7 @@ export class GameManager extends Component {
                 }
                 this.isCrushing = false;
             }, 0.04);
-        });
+        }, entry);
     }
 
     /** Highlights only a matching gate that is close to the held piece. */
@@ -825,22 +838,35 @@ export class GameManager extends Component {
     private overlapsShredderTrigger(block: Node, shredder: Node) {
         const gate = shredder.getComponent(Shredder);
         const targets = gate?.dropColliders() || this.allBoxColliders(shredder);
-        for (const blockCollider of this.allBoxColliders(block)) {
-            for (const targetCollider of targets) {
-                const trigger = this.worldBounds(targetCollider);
-                // The authored Area collider is intentionally a very thin slit.
-                // Give a released block a forgiving intake margin so a block
-                // stopped by the board wall can still enter its assigned gate.
-                // A full block can be held back from the physical rim by its
-                // own collider. Let the gate reach one block inward, matching
-                // the visible mouth rather than requiring a pixel-perfect
-                // overlap with its tiny authored trigger.
-                const intakeMargin = 0.15;
-                trigger.minX -= intakeMargin;
-                trigger.maxX += intakeMargin;
-                trigger.minZ -= intakeMargin;
-                trigger.maxZ += intakeMargin;
-                if (this.boundsIntersect(this.worldBounds(blockCollider), trigger)) return true;
+        const blockRects = this.colliderRects(block, block.worldPosition);
+        const blockBounds = {
+            minX: Math.min(...blockRects.map((rect) => rect.minX)),
+            maxX: Math.max(...blockRects.map((rect) => rect.maxX)),
+            minZ: Math.min(...blockRects.map((rect) => rect.minZ)),
+            maxZ: Math.max(...blockRects.map((rect) => rect.maxZ)),
+        };
+        const blockCenterX = (blockBounds.minX + blockBounds.maxX) * 0.5;
+        const blockCenterZ = (blockBounds.minZ + blockBounds.maxZ) * 0.5;
+        const normal = this.shredderExitNormal(block, shredder);
+
+        for (const targetCollider of targets) {
+            const trigger = this.worldBounds(targetCollider);
+            const intakeMargin = 0.15;
+            if (Math.abs(normal.z) > 0) {
+                // For a top/bottom gate, X is the mouth's lateral axis. The
+                // block centre must reach the slit; a touching corner is not a
+                // valid drop. Z keeps a small wall/collider tolerance.
+                const aligned = blockCenterX >= trigger.minX - intakeMargin
+                    && blockCenterX <= trigger.maxX + intakeMargin;
+                const reachesMouth = blockBounds.minZ <= trigger.maxZ + intakeMargin
+                    && blockBounds.maxZ >= trigger.minZ - intakeMargin;
+                if (aligned && reachesMouth) return true;
+            } else {
+                const aligned = blockCenterZ >= trigger.minZ - intakeMargin
+                    && blockCenterZ <= trigger.maxZ + intakeMargin;
+                const reachesMouth = blockBounds.minX <= trigger.maxX + intakeMargin
+                    && blockBounds.maxX >= trigger.minX - intakeMargin;
+                if (aligned && reachesMouth) return true;
             }
         }
         return false;
@@ -1064,8 +1090,13 @@ export class GameManager extends Component {
         return new Vec3(current.x - nearest.x, 0, current.z - nearest.z);
     }
 
-    /** Returns the closest cell on which this block can legally rest. */
-    private nearestGridPlacement(block: Node, desired: Readonly<Vec3>, requireUnoccupied: boolean): Vec3 | null {
+    /** Returns a legal nearby cell, never an arbitrary empty cell elsewhere on the board. */
+    private nearestGridPlacement(
+        block: Node,
+        desired: Readonly<Vec3>,
+        requireUnoccupied: boolean,
+        maxDistance = Number.POSITIVE_INFINITY,
+    ): Vec3 | null {
         const cells = this.gridCells.slice().sort((a, b) => {
             const ax = a.x + this.dragGridOffset.x;
             const az = a.z + this.dragGridOffset.z;
@@ -1075,17 +1106,25 @@ export class GameManager extends Component {
             const distanceB = (bx - desired.x) * (bx - desired.x) + (bz - desired.z) * (bz - desired.z);
             return distanceA - distanceB;
         });
+        const maxDistanceSquared = maxDistance * maxDistance;
         for (const cell of cells) {
             const candidate = new Vec3(
                 cell.x + this.dragGridOffset.x,
                 desired.y,
                 cell.z + this.dragGridOffset.z,
             );
+            if (this.planarDistanceSquared(candidate, desired) > maxDistanceSquared) break;
             if (!this.isExactBoardPlacement(block, candidate)) continue;
             if (requireUnoccupied && !this.canPlaceWithoutOverlap(block, candidate)) continue;
             return candidate;
         }
         return null;
+    }
+
+    /** Covers the farthest point within one grid cell without permitting a board-wide snap. */
+    private localGridSnapRadius() {
+        const cellSize = Math.max(this.gridCellSize, this.gridUnitWidth, this.gridUnitDepth, 0.5);
+        return cellSize * 0.8;
     }
 
     /** Rejects grid coordinates that the authored H-shaped walls would clamp. */
@@ -1256,6 +1295,18 @@ export class GameManager extends Component {
         if (Math.abs(normal.z) > 0) exit.z = normal.z > 0 ? bounds.maxZ + this.blockHalfExtent(block, 'z') : bounds.minZ - this.blockHalfExtent(block, 'z');
         else exit.x = normal.x > 0 ? bounds.maxX + this.blockHalfExtent(block, 'x') : bounds.minX - this.blockHalfExtent(block, 'x');
         return exit;
+    }
+
+    /** Aligns only across the mouth; the intake axis remains at the released
+     * position so the block never teleports forward into the shredder. */
+    private shredderEntryWorld(block: Node, shredder: Node, normal: Readonly<Vec3>) {
+        const areaCollider = shredder.getComponent(Shredder)?.dropColliders()[0] || null;
+        const entry = block.worldPosition.clone();
+        if (!areaCollider) return entry;
+        const bounds = this.worldBounds(areaCollider);
+        if (Math.abs(normal.z) > 0) entry.x = (bounds.minX + bounds.maxX) * 0.5;
+        else entry.z = (bounds.minZ + bounds.maxZ) * 0.5;
+        return entry;
     }
 
     private playCameraImpact(direction: Readonly<Vec3>) {
