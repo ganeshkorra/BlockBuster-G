@@ -40,6 +40,11 @@ export class Block extends Component {
 
     beginDrag(): boolean {
         if (this.dragging || this.consuming) return false;
+        // A player can pick a block up again while its short release snap is
+        // still running. That tween is driven by placementMotion (not the
+        // node), so stopping node tweens alone leaves it able to overwrite the
+        // new drag position and make the block appear to jump on its own.
+        Tween.stopAllByTarget(this.placementMotion);
         this.dragging = true;
         this.dragBaseY = this.node.worldPosition.y;
         this.dragTarget = this.node.worldPosition.clone();

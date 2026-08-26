@@ -138,8 +138,8 @@
       "b": 240,
       "a": 255
     },
-    "_useColorTemperature": false,
-    "_colorTemperature": 7500,
+    "_useColorTemperature": true,
+    "_colorTemperature": 7000,
     "_staticSettings": {
       "__id__": 4
     },
@@ -10809,7 +10809,7 @@
     ],
     "value": {
       "__type__": "cc.Vec3",
-      "x": -4.172,
+      "x": -4.045,
       "y": 0.496,
       "z": -10.529
     }
@@ -11038,7 +11038,7 @@
     ],
     "value": {
       "__type__": "cc.Vec3",
-      "x": 0.943,
+      "x": 1.148,
       "y": 1.5,
       "z": 1.19
     }
@@ -11059,7 +11059,7 @@
     ],
     "value": {
       "__type__": "cc.Vec3",
-      "x": 0.5128205128205129,
+      "x": 1,
       "y": 1,
       "z": 1
     }
@@ -11402,7 +11402,7 @@
     ],
     "value": {
       "__type__": "cc.Vec3",
-      "x": 0.5128205128205129,
+      "x": 1,
       "y": 1,
       "z": 1
     }
@@ -11524,7 +11524,7 @@
     ],
     "value": {
       "__type__": "cc.Vec3",
-      "x": -0.136,
+      "x": 0.021,
       "y": 0.496,
       "z": -10.529
     }
@@ -11662,7 +11662,7 @@
     ],
     "value": {
       "__type__": "cc.Vec3",
-      "x": 3.202,
+      "x": 2.972,
       "y": 1.5,
       "z": 1.19
     }
@@ -12212,7 +12212,7 @@
       "__id__": 842
     },
     "_children": [],
-    "_active": true,
+    "_active": false,
     "_components": [
       {
         "__id__": 847
@@ -12800,9 +12800,9 @@
     "_dstBlendFactor": 4,
     "_color": {
       "__type__": "cc.Color",
-      "r": 235,
-      "g": 255,
-      "b": 0,
+      "r": 255,
+      "g": 204,
+      "b": 73,
       "a": 255
     },
     "_string": "Yellow",
@@ -14103,29 +14103,29 @@
       "x": 1,
       "y": 1,
       "z": 1,
-      "w": 0.39062484375
+      "w": 0.520833125
     },
     "_skyColor": {
       "__type__": "cc.Vec4",
       "x": 1,
       "y": 1,
       "z": 1,
-      "w": 0.39062484375
+      "w": 0.520833125
     },
-    "_skyIllumHDR": 15000,
-    "_skyIllum": 15000,
+    "_skyIllumHDR": 20000,
+    "_skyIllum": 20000,
     "_groundAlbedoHDR": {
       "__type__": "cc.Vec4",
-      "x": 1,
-      "y": 1,
-      "z": 1,
+      "x": 0,
+      "y": 0,
+      "z": 0,
       "w": 1
     },
     "_groundAlbedo": {
       "__type__": "cc.Vec4",
-      "x": 1,
-      "y": 1,
-      "z": 1,
+      "x": 0,
+      "y": 0,
+      "z": 0,
       "w": 1
     },
     "_skyColorLDR": {
@@ -14147,7 +14147,7 @@
   {
     "__type__": "cc.ShadowsInfo",
     "_enabled": false,
-    "_type": 0,
+    "_type": 1,
     "_normal": {
       "__type__": "cc.Vec3",
       "x": 0,
@@ -14241,6 +14241,6 @@
   },
   {
     "__type__": "cc.PostSettingsInfo",
-    "_toneMappingType": 0
+    "_toneMappingType": 1
   }
 ]

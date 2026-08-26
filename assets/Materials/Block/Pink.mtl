@@ -87,13 +87,12 @@
       "mainColor": {
         "__type__": "cc.Color",
         "r": 255,
-        "g": 84,
-        "b": 184,
+        "g": 105,
+        "b": 174,
         "a": 255
       },
-      "roughness": 0.799,
-      "metallic": 0.633,
-      "specularIntensity": 0.56
+      "roughness": 0.52,
+      "specularIntensity": 0.541
     },
     {},
     {},
