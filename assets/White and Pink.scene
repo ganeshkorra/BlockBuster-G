@@ -10728,6 +10728,7 @@
     "instance": {
       "__id__": 752
     },
+    "targetOverrides": null,
     "nestedPrefabInstanceRoots": null
   },
   {
@@ -12120,9 +12121,9 @@
     "_prefab": null,
     "_lpos": {
       "__type__": "cc.Vec3",
-      "x": -0.126,
-      "y": 0,
-      "z": -0.054
+      "x": -0.053,
+      "y": -0.541,
+      "z": -0.113
     },
     "_lrot": {
       "__type__": "cc.Quat",
@@ -12220,9 +12221,9 @@
     "_prefab": null,
     "_lpos": {
       "__type__": "cc.Vec3",
-      "x": -0.126,
-      "y": 0,
-      "z": -0.054
+      "x": -0.053,
+      "y": -0.541,
+      "z": -0.113
     },
     "_lrot": {
       "__type__": "cc.Quat",

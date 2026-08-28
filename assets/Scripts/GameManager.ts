@@ -85,7 +85,8 @@ export class GameManager extends Component {
 
     // Tutorial hand state
     private tutorialHandActive = false;
-    private tutorialHandPulseFn: (() => void) | null = null;
+    private tutorialHandTween: Tween<Node> | null = null;
+    private tutorialHandShredder: Shredder | null = null;
     private yellowTutorialActive = false;
     private yellowTutorialBlock: Node | null = null;
     private yellowTutorialShredder: Node | null = null;
@@ -96,7 +97,7 @@ export class GameManager extends Component {
 
     // Game timer state
     private gameTimeElapsed = 0;
-    private readonly gameTimeDuration = 35; // seconds
+    private readonly gameTimeDuration = 50; // seconds
     private gameTimeActive = false;
     private gameTimeStarted = false;
     private challengeStarted = false;
@@ -204,41 +205,45 @@ export class GameManager extends Component {
     }
 
     private startTutorialHand() {
-        if (!this.hand) return;
+        if (!this.hand || !this.hand.isValid) return;
         this.tutorialHandActive = true;
+        this.tutorialHandTween?.stop();
+        Tween.stopAllByTarget(this.hand);
+
+        const home = this.hand.position.clone();
+        const dragTarget = home.clone().add(new Vec3(0, -0.3, -1.8));
+        const white = this.elements.find((element) => element.elementId.trim().toLowerCase() === 'white');
+        const whiteBlock = white?.blockNodes.find((entry) => entry?.isValid) || null;
+        const whiteShredder = white?.targetShredders
+            .find((entry) => entry?.isValid)
+            ?.getComponent(Shredder) || null;
+        this.tutorialHandShredder?.setAnticipation(false, null);
+        this.tutorialHandShredder = whiteShredder;
         this.showHandIdle();
-        // Pulse function: show click briefly, then return to idle.
-        this.tutorialHandPulseFn = () => {
-            if (!this.tutorialHandActive) return;
-            // Idle -> Click
-            this.showHandClick();
 
-            // Simulate a short press then a drag motion, then return to idle.
-            const dragOutDuration = 0.28;
-            const dragBackDuration = 0.28;
-            const totalDrag = dragOutDuration + dragBackDuration;
-
-            // Choose a small local offset to read as a drag gesture. Adjust as needed.
-            const home = this.hand.position.clone();
-            const dragOffset = new Vec3(0, -0.3, -0.3);
-
-            // Start drag tween: out then back.
-            Tween.stopAllByTarget(this.hand);
-            tween(this.hand)
-                .to(dragOutDuration, { position: home.clone().add(dragOffset) }, { easing: 'sineOut' })
-                .to(dragBackDuration, { position: home }, { easing: 'sineIn' })
-                .start();
-
-            // After the drag completes, go to idle.
-            this.scheduleOnce(() => {
-                if (!this.tutorialHandActive) return;
-                this.showHandIdle();
-            }, totalDrag);
-        };
-
-        // Run immediately and then repeat every 1.6s.
-        this.tutorialHandPulseFn();
-        this.schedule(this.tutorialHandPulseFn, 1.6);
+        this.tutorialHandTween = tween(this.hand)
+            .delay(0.35)
+            .call(() => {
+                if (this.tutorialHandActive) this.showHandClick();
+            })
+            .delay(0.12)
+            // Keep the click pose visible for the complete drag and return.
+            .to(0.42, { position: dragTarget }, { easing: 'sineOut' })
+            .call(() => {
+                if (this.tutorialHandActive && this.tutorialHandShredder === whiteShredder) {
+                    whiteShredder?.setAnticipation(true, whiteBlock ? this.blockMainColour(whiteBlock) : null);
+                }
+            })
+            .delay(0.42)
+            .call(() => whiteShredder?.setAnticipation(false, null))
+            .to(0.32, { position: home }, { easing: 'sineIn' })
+            .call(() => {
+                if (this.tutorialHandActive) this.showHandIdle();
+            })
+            .delay(0.75)
+            .union()
+            .repeatForever()
+            .start();
     }
 
     /** Loops a translucent visual copy from the Yellow block to its authored shredder. */
@@ -379,11 +384,10 @@ export class GameManager extends Component {
 
     private stopTutorialHand() {
         this.tutorialHandActive = false;
-        if (this.tutorialHandPulseFn) {
-            try { this.unschedule(this.tutorialHandPulseFn); } catch (_) { /* ignore */ }
-            this.tutorialHandPulseFn = null;
-        }
-        // Stop any running hand tweens and hide.
+        this.tutorialHandTween?.stop();
+        this.tutorialHandTween = null;
+        this.tutorialHandShredder?.setAnticipation(false, null);
+        this.tutorialHandShredder = null;
         try { Tween.stopAllByTarget(this.hand); } catch (_) { /* ignore */ }
         this.hideHand();
     }
