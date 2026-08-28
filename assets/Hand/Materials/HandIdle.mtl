@@ -19,7 +19,9 @@
   "_states": [
     {
       "rasterizerState": {},
-      "depthStencilState": {},
+      "depthStencilState": {
+        "depthFunc": 7
+      },
       "blendState": {
         "targets": [
           {}
