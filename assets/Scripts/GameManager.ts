@@ -12,6 +12,7 @@ type Bounds3D = { minX: number; maxX: number; minY: number; maxY: number; minZ: 
 type Rect = { minX: number; maxX: number; minZ: number; maxZ: number };
 type BoardShape = { outer: Rect; neck: Rect | null };
 type GridCell = { column: number; row: number; x: number; z: number };
+type IdleHintPlan = { block: Node; shredder: Node; path: Vec3[]; distance: number };
 
 /** One independently configurable colour/type. Its node arrays are the level authoring interface. */
 @ccclass('GameElement')
@@ -87,6 +88,12 @@ export class GameManager extends Component {
     private tutorialHandActive = false;
     private tutorialHandTween: Tween<Node> | null = null;
     private tutorialHandShredder: Shredder | null = null;
+    private handAuthoredWorldPosition: Vec3 | null = null;
+    private idleHintElapsed = 0;
+    private readonly idleHintDelay = 70;
+    private idleHintActive = false;
+    private idleHintShredder: Shredder | null = null;
+    private readonly idleHintMotion = { t: 0 };
     private yellowTutorialActive = false;
     private yellowTutorialBlock: Node | null = null;
     private yellowTutorialShredder: Node | null = null;
@@ -103,6 +110,8 @@ export class GameManager extends Component {
     private challengeStarted = false;
     private challengeFailed = false;
     private challengeSolved = false;
+    private readonly blocksBeforeEndscreen = 4;
+    private destroyedBlockCount = 0;
     private challengeObstacleCount = 0;
     private challengeObstaclesCleared = 0;
     private challengeProgressStep = 0;
@@ -125,6 +134,7 @@ export class GameManager extends Component {
         input.on(Input.EventType.TOUCH_MOVE, this.onTouchMove, this);
         input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.on(Input.EventType.TOUCH_CANCEL, this.onTouchCancel, this);
+        if (this.hand?.isValid) this.handAuthoredWorldPosition = this.hand.worldPosition.clone();
         // Loop a translucent copy of the yellow piece toward its shredder. The
         // authored gameplay block stays fixed and fully interactive underneath.
         if (this.hand) this.startYellowShredderTutorial();
@@ -135,12 +145,14 @@ export class GameManager extends Component {
         this.challengeStarted = false;
         this.challengeFailed = false;
         this.challengeSolved = false;
+        this.destroyedBlockCount = 0;
         this.challengeObstacleCount = this.elements.reduce((total, element) => {
             if (this.isChallengeGoalElement(element)) return total;
             return total + element.blockNodes.filter((block) => !!block && block.isValid).length;
         }, 0);
         this.challengeObstaclesCleared = 0;
         this.challengeProgressStep = 0;
+        this.idleHintElapsed = 0;
         // Ensure CTA is inactive at start.
         if (this.cta && this.cta.isValid) this.cta.active = false;
         // LOADED is required whenever LOADING is emitted. DISPLAYED follows
@@ -157,7 +169,9 @@ export class GameManager extends Component {
             // This is an ad-duration endcard, not a gameplay failure. Do not
             // emit CHALLENGE_FAILED for a player who simply reached ad time.
             this.showCTA();
+            return;
         }
+        this.updateIdleHint(deltaTime);
     }
 
     onDestroy() {
@@ -167,6 +181,7 @@ export class GameManager extends Component {
         input.off(Input.EventType.TOUCH_CANCEL, this.onTouchCancel, this);
         this.finishYellowShredderTutorial(false);
         this.stopTutorialHand();
+        this.stopIdleHint();
         this.gameTimeActive = false;
         this.bgmSource?.stop();
         this.dragSource?.stop();
@@ -277,7 +292,7 @@ export class GameManager extends Component {
         );
 
         const blockStart = block.worldPosition.clone();
-        const blockEnd = this.yellowTutorialDropPoint(block, shredder);
+        const blockEnd = this.tutorialDropPoint(block, shredder);
         const handYOffset = this.yellowTutorialHandHome.y - blockStart.y;
         const handStart = new Vec3(blockStart.x, blockStart.y + handYOffset, blockStart.z);
         const handEnd = new Vec3(blockEnd.x, blockEnd.y + handYOffset, blockEnd.z);
@@ -350,7 +365,7 @@ export class GameManager extends Component {
     }
 
     /** Uses the centre of the shredder's authored drop trigger as the tutorial destination. */
-    private yellowTutorialDropPoint(block: Node, shredder: Node) {
+    private tutorialDropPoint(block: Node, shredder: Node) {
         const collider = shredder.getComponent(Shredder)?.dropColliders()[0] || null;
         if (!collider) return new Vec3(shredder.worldPosition.x, block.worldPosition.y, shredder.worldPosition.z);
         const bounds = this.worldBounds(collider);
@@ -390,6 +405,255 @@ export class GameManager extends Component {
         this.tutorialHandShredder = null;
         try { Tween.stopAllByTarget(this.hand); } catch (_) { /* ignore */ }
         this.hideHand();
+    }
+
+    private updateIdleHint(deltaTime: number) {
+        if (this.idleHintActive) return;
+        if (!this.challengeStarted || this.challengeSolved || this.challengeFailed
+            || this.yellowTutorialActive || this.grabbed || this.isCrushing) {
+            this.idleHintElapsed = 0;
+            return;
+        }
+
+        this.idleHintElapsed += deltaTime;
+        if (this.idleHintElapsed >= this.idleHintDelay) this.startIdleHint();
+    }
+
+    private registerPlayerActivity() {
+        this.idleHintElapsed = 0;
+        if (this.idleHintActive) this.stopIdleHint();
+    }
+
+    private startIdleHint() {
+        if (!this.hand || !this.hand.isValid) return;
+        const plan = this.bestIdleHintPlan();
+        if (!plan) {
+            this.idleHintElapsed = 0;
+            return;
+        }
+
+        this.stopTutorialHand();
+        this.idleHintActive = true;
+        this.idleHintElapsed = 0;
+        this.idleHintShredder = plan.shredder.getComponent(Shredder);
+
+        const authoredHome = this.handAuthoredWorldPosition || this.hand.worldPosition;
+        const handYOffset = authoredHome.y - plan.path[0].y;
+        const handPath = plan.path.map((point) =>
+            new Vec3(point.x, point.y + handYOffset, point.z));
+        const returnPath = handPath.slice().reverse();
+        const handStart = handPath[0];
+        this.hand.setWorldPosition(handStart);
+        this.showHandIdle();
+
+        const applyMotion = (path: Readonly<Vec3>[]) => {
+            if (!this.idleHintActive || !this.hand?.isValid) return;
+            this.hand.setWorldPosition(this.pointAlongHintPath(path, this.idleHintMotion.t));
+        };
+
+        Tween.stopAllByTarget(this.idleHintMotion);
+        this.idleHintMotion.t = 0;
+        tween(this.idleHintMotion)
+            .delay(0.35)
+            .call(() => {
+                if (this.idleHintActive) this.showHandClick();
+            })
+            .to(Math.max(0.65, plan.distance * 0.16), { t: 1 }, {
+                easing: 'sineInOut',
+                onUpdate: () => applyMotion(handPath),
+            })
+            .call(() => {
+                if (this.idleHintActive) {
+                    this.idleHintShredder?.setAnticipation(true, this.blockMainColour(plan.block));
+                }
+            })
+            .delay(0.42)
+            .call(() => {
+                this.idleHintShredder?.setAnticipation(false, null);
+                this.idleHintMotion.t = 0;
+            })
+            .to(Math.max(0.35, plan.distance * 0.08), { t: 1 }, {
+                easing: 'sineInOut',
+                onUpdate: () => applyMotion(returnPath),
+            })
+            .call(() => {
+                this.idleHintMotion.t = 0;
+                if (this.hand?.isValid) {
+                    this.hand.setWorldPosition(handStart);
+                    this.showHandIdle();
+                }
+            })
+            .delay(0.65)
+            .union()
+            .repeatForever()
+            .start();
+    }
+
+    private stopIdleHint() {
+        if (!this.idleHintActive) return;
+        this.idleHintActive = false;
+        Tween.stopAllByTarget(this.idleHintMotion);
+        this.idleHintMotion.t = 0;
+        this.idleHintShredder?.setAnticipation(false, null);
+        this.idleHintShredder = null;
+        if (this.hand?.isValid && this.handAuthoredWorldPosition) {
+            this.hand.setWorldPosition(this.handAuthoredWorldPosition);
+        }
+        this.hideHand();
+    }
+
+    /** Finds the shortest move that can actually reach a matching shredder. */
+    private bestIdleHintPlan(): IdleHintPlan | null {
+        let best: IdleHintPlan | null = null;
+        for (const element of this.elements) {
+            const blocks = element.blockNodes.filter((block) =>
+                !!block && block.isValid && !block.getComponent(Block)?.isConsuming,
+            );
+            const shredders = element.targetShredders.filter((shredder) =>
+                !!shredder && shredder.isValid && !!shredder.getComponent(Shredder),
+            );
+            for (const block of blocks) {
+                for (const shredder of shredders) {
+                    const plan = this.findIdleHintRoute(block, shredder);
+                    if (plan && (!best
+                        || plan.path.length < best.path.length
+                        || (plan.path.length === best.path.length && plan.distance < best.distance))) {
+                        best = plan;
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    /** Breadth-first search across authored cells using the real block footprint. */
+    private findIdleHintRoute(block: Node, shredder: Node): IdleHintPlan | null {
+        if (this.gridCells.length === 0) return null;
+        const start = block.worldPosition.clone();
+        const offset = this.gridOffsetForBlock(block);
+        const positions = this.gridCells.map((cell) => new Vec3(
+            cell.x + offset.x,
+            start.y,
+            cell.z + offset.z,
+        ));
+        const dropPosition = this.tutorialDropPoint(block, shredder);
+        this.keepInsideBoardColliders(block, dropPosition);
+        const validDropPosition = this.overlapsShredderTrigger(block, shredder, dropPosition);
+        let startIndex = 0;
+        for (let index = 1; index < positions.length; index++) {
+            if (this.planarDistanceSquared(positions[index], start)
+                < this.planarDistanceSquared(positions[startIndex], start)) {
+                startIndex = index;
+            }
+        }
+
+        const queue = [startIndex];
+        const visited = new Set<number>([startIndex]);
+        const parent = new Map<number, number>();
+        const indexByCell = new Map<string, number>();
+        this.gridCells.forEach((cell, index) => indexByCell.set(`${cell.column}:${cell.row}`, index));
+        const directions = [[-1, 0], [1, 0], [0, -1], [0, 1]];
+        let goalIndex = -1;
+        let appendDropPosition = false;
+
+        while (queue.length > 0) {
+            const currentIndex = queue.shift()!;
+            const currentCell = this.gridCells[currentIndex];
+            const currentPosition = currentIndex === startIndex ? start : positions[currentIndex];
+            if (this.overlapsShredderTrigger(block, shredder, currentPosition)
+                || (validDropPosition && this.canTravelHintSegment(block, currentPosition, dropPosition))) {
+                goalIndex = currentIndex;
+                appendDropPosition = this.planarDistanceSquared(currentPosition, dropPosition) > 0.001;
+                break;
+            }
+
+            for (const [columnStep, rowStep] of directions) {
+                const index = indexByCell.get(
+                    `${currentCell.column + columnStep}:${currentCell.row + rowStep}`,
+                );
+                if (index === undefined || visited.has(index)) continue;
+                const candidate = positions[index];
+                if (!this.isExactBoardPlacement(block, candidate)
+                    || !this.canPlaceWithoutOverlap(block, candidate)
+                    || !this.canTravelHintSegment(block, currentPosition, candidate)) continue;
+                visited.add(index);
+                parent.set(index, currentIndex);
+                queue.push(index);
+            }
+        }
+
+        if (goalIndex < 0) return null;
+        const indices: number[] = [];
+        for (let index = goalIndex; index !== startIndex; index = parent.get(index)!) indices.push(index);
+        indices.reverse();
+        let path = [start, ...indices.map((index) => positions[index])];
+        if (appendDropPosition) path.push(dropPosition);
+        path = this.simplifyHintPath(path);
+        let distance = 0;
+        for (let index = 1; index < path.length; index++) distance += Vec3.distance(path[index - 1], path[index]);
+        return { block, shredder, path, distance };
+    }
+
+    private simplifyHintPath(path: Vec3[]) {
+        if (path.length <= 2) return path;
+        const simplified = [path[0]];
+        for (let index = 1; index < path.length - 1; index++) {
+            const previous = simplified[simplified.length - 1];
+            const current = path[index];
+            const next = path[index + 1];
+            const firstX = current.x - previous.x;
+            const firstZ = current.z - previous.z;
+            const secondX = next.x - current.x;
+            const secondZ = next.z - current.z;
+            if (Math.abs(firstX * secondZ - firstZ * secondX) > 0.001) simplified.push(current);
+        }
+        simplified.push(path[path.length - 1]);
+        return simplified;
+    }
+
+    private canTravelHintSegment(block: Node, from: Readonly<Vec3>, to: Readonly<Vec3>) {
+        const distance = Math.sqrt(this.planarDistanceSquared(from, to));
+        const steps = Math.max(1, Math.ceil(distance / 0.2));
+        for (let step = 1; step <= steps; step++) {
+            const t = step / steps;
+            const candidate = new Vec3(
+                from.x + (to.x - from.x) * t,
+                from.y,
+                from.z + (to.z - from.z) * t,
+            );
+            const constrained = candidate.clone();
+            this.keepInsideBoardColliders(block, constrained);
+            if (this.planarDistanceSquared(candidate, constrained) > 0.01
+                || !this.canPlaceWithoutOverlap(block, candidate)) return false;
+        }
+        return true;
+    }
+
+    private pointAlongHintPath(path: Readonly<Vec3>[], progress: number) {
+        if (path.length <= 1) return path[0]?.clone() || new Vec3();
+        const lengths: number[] = [];
+        let total = 0;
+        for (let index = 1; index < path.length; index++) {
+            const length = Vec3.distance(path[index - 1], path[index]);
+            lengths.push(length);
+            total += length;
+        }
+        let remaining = Math.max(0, Math.min(1, progress)) * total;
+        for (let index = 0; index < lengths.length; index++) {
+            if (remaining > lengths[index] && index < lengths.length - 1) {
+                remaining -= lengths[index];
+                continue;
+            }
+            const from = path[index];
+            const to = path[index + 1];
+            const t = lengths[index] > 0 ? remaining / lengths[index] : 1;
+            return new Vec3(
+                from.x + (to.x - from.x) * t,
+                from.y + (to.y - from.y) * t,
+                from.z + (to.z - from.z) * t,
+            );
+        }
+        return path[path.length - 1].clone();
     }
 
     /** Rebuilds runtime state exclusively from the Elements inspector arrays. */
@@ -447,6 +711,7 @@ export class GameManager extends Component {
 
     private onTouchStart(event: EventTouch) {
         this.startBgmFromInteraction();
+        this.registerPlayerActivity();
         // The first real touch removes the yellow route, restores the hand to
         // its authored scene position, and starts the original repeating cue.
         const keepTutorialHand = this.yellowTutorialActive;
@@ -502,6 +767,7 @@ export class GameManager extends Component {
     private onTouchEnd() {
         const block = this.grabbed;
         if (!block) return;
+        this.idleHintElapsed = 0;
         this.grabbed = null;
         // Complete the short follow smoothing before evaluating the drop.
         // This keeps a quick release over a gate from feeling unresponsive.
@@ -706,6 +972,7 @@ export class GameManager extends Component {
     }
 
     private showCTA() {
+        this.stopIdleHint();
         if (!this.cta || !this.cta.isValid) return;
         this.cta.active = true;
         Analytics.trackEvent(analyticsEvents.ENDCARD_SHOWN);
@@ -713,32 +980,32 @@ export class GameManager extends Component {
         this.gameTimeActive = false;
     }
 
-    /** Yellow entering its shredder completes the challenge; other successful
-     * shreds advance progress according to the visible board pieces cleared. */
+    /** The fourth successful shred completes the playable and opens the end screen. */
     private recordGameplayProgress(isChallengeGoal: boolean) {
         if (!this.challengeStarted || this.challengeFailed || this.challengeSolved) return;
-        if (isChallengeGoal) {
-            this.challengeSolved = true;
-            this.gameTimeActive = false;
-            Analytics.trackEvent(analyticsEvents.CHALLENGE_SOLVED);
-            this.showCTA();
-            return;
+        this.destroyedBlockCount++;
+
+        if (!isChallengeGoal && this.challengeObstacleCount > 0) {
+            this.challengeObstaclesCleared++;
+            const progress = this.challengeObstaclesCleared / this.challengeObstacleCount;
+            const events = [
+                analyticsEvents.CHALLENGE_PASS_25,
+                analyticsEvents.CHALLENGE_PASS_50,
+                analyticsEvents.CHALLENGE_PASS_75,
+            ];
+            const thresholds = [0.25, 0.50, 0.75];
+            while (this.challengeProgressStep < thresholds.length
+                && progress >= thresholds[this.challengeProgressStep]) {
+                Analytics.trackEvent(events[this.challengeProgressStep]);
+                this.challengeProgressStep++;
+            }
         }
 
-        this.challengeObstaclesCleared++;
-        if (this.challengeObstacleCount <= 0) return;
-        const progress = this.challengeObstaclesCleared / this.challengeObstacleCount;
-        const events = [
-            analyticsEvents.CHALLENGE_PASS_25,
-            analyticsEvents.CHALLENGE_PASS_50,
-            analyticsEvents.CHALLENGE_PASS_75,
-        ];
-        const thresholds = [0.25, 0.50, 0.75];
-        while (this.challengeProgressStep < thresholds.length
-            && progress >= thresholds[this.challengeProgressStep]) {
-            Analytics.trackEvent(events[this.challengeProgressStep]);
-            this.challengeProgressStep++;
-        }
+        if (this.destroyedBlockCount < this.blocksBeforeEndscreen) return;
+        this.challengeSolved = true;
+        this.gameTimeActive = false;
+        Analytics.trackEvent(analyticsEvents.CHALLENGE_SOLVED);
+        this.showCTA();
     }
 
     /** Call only when gameplay enters a real authored failure state. */
@@ -746,6 +1013,7 @@ export class GameManager extends Component {
         if (!this.challengeStarted || this.challengeFailed || this.challengeSolved) return;
         this.challengeFailed = true;
         this.gameTimeActive = false;
+        this.stopIdleHint();
         Analytics.trackEvent(analyticsEvents.CHALLENGE_FAILED);
     }
 
@@ -755,6 +1023,7 @@ export class GameManager extends Component {
         this.challengeFailed = false;
         this.gameTimeElapsed = 0;
         this.gameTimeActive = true;
+        this.idleHintElapsed = 0;
         if (this.cta?.isValid) this.cta.active = false;
         Analytics.trackEvent(analyticsEvents.CHALLENGE_RETRY);
     }
@@ -839,10 +1108,10 @@ export class GameManager extends Component {
         return new Vec3(ray.o.x + ray.d.x * t, this.dragHeight, ray.o.z + ray.d.z * t);
     }
 
-    private overlapsShredderTrigger(block: Node, shredder: Node) {
+    private overlapsShredderTrigger(block: Node, shredder: Node, position: Readonly<Vec3> = block.worldPosition) {
         const gate = shredder.getComponent(Shredder);
         const targets = gate?.dropColliders() || this.allBoxColliders(shredder);
-        const blockRects = this.colliderRects(block, block.worldPosition);
+        const blockRects = this.colliderRects(block, position);
         const blockBounds = {
             minX: Math.min(...blockRects.map((rect) => rect.minX)),
             maxX: Math.max(...blockRects.map((rect) => rect.maxX)),
